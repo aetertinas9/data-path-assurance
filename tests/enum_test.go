@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/aetertinas9/data-path-assurance/pkg/model"
@@ -386,5 +387,108 @@ func TestMDL070_NonEnumeratedStringIsStable(t *testing.T) {
 				t.Errorf("String()이 호출마다 달랐다: %q vs %q", first, second)
 			}
 		})
+	}
+}
+
+// --- v1.3 신설: 열거형 기반 타입 (MDL-070(e)) ---
+
+// negativeEnumValues는 12개 열거형 각각의 "열거되지 않은 음수 값"이다.
+// 이 표가 컴파일된다는 사실 자체가 MDL-070(e)의 절반(부호 있는 정수 계열이라
+// 음수 정수 리터럴 변환이 가능하다)을 검증한다. 문자열 기반 타입이라면
+// model.Severity(-1)은 컴파일되지 않는다.
+func negativeEnumValues() []nonEnumCase {
+	return []nonEnumCase{
+		{"AssetKind", model.AssetKind(-1)},
+		{"ValueKind", model.ValueKind(-1)},
+		{"EvidenceQuality", model.EvidenceQuality(-1)},
+		{"FindingType", model.FindingType(-1)},
+		{"Severity", model.Severity(-1)},
+		{"Confidence", model.Confidence(-1)},
+		{"EvidenceLevel", model.EvidenceLevel(-1)},
+		{"FindingState", model.FindingState(-1)},
+		{"ImpactAccuracy", model.ImpactAccuracy(-1)},
+		{"EdgeRelation", model.EdgeRelation(-1)},
+		{"EdgeOrigin", model.EdgeOrigin(-1)},
+		{"ConditionStatus", model.ConditionStatus(-1)},
+
+		{"AssetKind(-42)", model.AssetKind(-42)},
+		{"Severity(-99)", model.Severity(-99)},
+	}
+}
+
+// MDL-070 (e) (v1.3 신설): 모든 열거형의 기반 타입은 부호 있는 정수 계열이다.
+// 회차 2의 해석 고지 I-6("기반 타입이 정수임을 가정해야 한다")이 v1.3에서
+// 계약으로 승격되었으므로, 이제 직접 단정한다.
+func TestMDL070_EnumBaseTypesAreSignedIntegers(t *testing.T) {
+	signedKinds := map[reflect.Kind]bool{
+		reflect.Int:   true,
+		reflect.Int8:  true,
+		reflect.Int16: true,
+		reflect.Int32: true,
+		reflect.Int64: true,
+	}
+	for _, tc := range negativeEnumValues() {
+		t.Run(tc.enum, func(t *testing.T) {
+			got := reflect.TypeOf(tc.val).Kind()
+			if !signedKinds[got] {
+				t.Errorf("%s의 기반 타입 Kind = %v, 부호 있는 정수 계열이어야 한다", tc.enum, got)
+			}
+		})
+	}
+}
+
+// MDL-070 (e) + (b)(d): 열거되지 않은 음수 값에서도 IsValid()는 거짓이고
+// String()은 panic하지 않는다 (반환값은 계약이 아니다).
+func TestMDL070_NegativeEnumValuesAreInvalidAndDoNotPanic(t *testing.T) {
+	for _, tc := range negativeEnumValues() {
+		t.Run(tc.enum, func(t *testing.T) {
+			if tc.val.IsValid() {
+				t.Errorf("열거 밖 음수 %s의 IsValid()는 거짓이어야 한다", tc.enum)
+			}
+			mustNotPanic(t, "열거 밖 음수 "+tc.enum+"의 String()", func() {
+				_ = tc.val.String()
+			})
+		})
+	}
+}
+
+// MDL-070 (e): zero value도 정수 리터럴 0으로부터 만들 수 있고, (b)의 판정은
+// 그 값에도 그대로 적용된다 (EvidenceQuality만 예외).
+func TestMDL070_ZeroFromIntegerLiteralMatchesZeroValue(t *testing.T) {
+	cases := []struct {
+		enum      string
+		val       enumValue
+		wantValid bool
+	}{
+		{"AssetKind", model.AssetKind(0), false},
+		{"ValueKind", model.ValueKind(0), false},
+		{"EvidenceQuality", model.EvidenceQuality(0), true}, // 명시된 예외
+		{"FindingType", model.FindingType(0), false},
+		{"Severity", model.Severity(0), false},
+		{"Confidence", model.Confidence(0), false},
+		{"EvidenceLevel", model.EvidenceLevel(0), false},
+		{"FindingState", model.FindingState(0), false},
+		{"ImpactAccuracy", model.ImpactAccuracy(0), false},
+		{"EdgeRelation", model.EdgeRelation(0), false},
+		{"EdgeOrigin", model.EdgeOrigin(0), false},
+		{"ConditionStatus", model.ConditionStatus(0), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.enum, func(t *testing.T) {
+			if got := tc.val.IsValid(); got != tc.wantValid {
+				t.Errorf("%s(0).IsValid() = %v, want %v", tc.enum, got, tc.wantValid)
+			}
+			mustNotPanic(t, tc.enum+"(0)의 String()", func() { _ = tc.val.String() })
+		})
+	}
+
+	// 정수 리터럴 0에서 만든 값은 zero value와 같다.
+	var zeroKind model.AssetKind
+	if model.AssetKind(0) != zeroKind {
+		t.Errorf("AssetKind(0)이 zero value와 달랐다")
+	}
+	var zeroSeverity model.Severity
+	if model.Severity(0) != zeroSeverity {
+		t.Errorf("Severity(0)이 zero value와 달랐다")
 	}
 }

@@ -179,3 +179,57 @@ func TestMDL090_SampleAcceptsNonUTCFixedTimestamp(t *testing.T) {
 	}
 	requireNoErr(t, s.Validate(), "Sample.Validate()(비-UTC 고정 시각)")
 }
+
+// --- v1.3 신설: PartitionKey.String()의 항등성 (MDL-081) ---
+
+// MDL-081 (v1.3 신설): 임의의 PartitionKey p(유효 여부와 무관, 빈 문자열 포함)에
+// 대해 String()은 string(p)를 그대로 반환한다 — 정규화·트리밍이 없다.
+// 회차 2의 해석 고지 I-7이 v1.3에서 계약으로 승격되었으므로 직접 단정한다.
+func TestMDL081_PartitionKeyStringIsIdentity(t *testing.T) {
+	corpus := []string{
+		"",                // zero value (무효)
+		" ",               // 공백만 (유효)
+		"  rack-01  ",     // 앞뒤 공백 — 트리밍하지 않는다
+		"\track-01\n",     // 탭·개행
+		"RACK-01",         // 대문자 — 소문자화하지 않는다
+		"rack-01",         //
+		"node-a/pcie0",    // 경로 형태
+		"site:row:rack",   // 콜론
+		"랙-01",            // 비-ASCII
+		"key\x00with-nul", // 제어 문자
+		"a",               // 한 글자
+	}
+	for _, s := range corpus {
+		t.Run(s, func(t *testing.T) {
+			pk := model.PartitionKey(s)
+
+			var got string
+			mustNotPanic(t, "PartitionKey.String()", func() { got = pk.String() })
+			if got != s {
+				t.Errorf("PartitionKey(%q).String() = %q, want %q (항등이어야 한다)", s, got, s)
+			}
+			if got != string(pk) {
+				t.Errorf("String() = %q, string(PartitionKey) = %q — 둘은 같아야 한다", got, string(pk))
+			}
+			// 반복 호출에 안정적이다 (MDL-002).
+			if second := pk.String(); second != got {
+				t.Errorf("String()이 호출마다 달랐다: %q vs %q", got, second)
+			}
+			// 유효성과 무관하다.
+			_ = pk.IsValid()
+			if third := pk.String(); third != got {
+				t.Errorf("IsValid() 호출 후 String()이 달라졌다: %q vs %q", got, third)
+			}
+		})
+	}
+}
+
+// MDL-081: zero value PartitionKey의 String()은 빈 문자열이다.
+func TestMDL081_ZeroPartitionKeyStringIsEmpty(t *testing.T) {
+	var zero model.PartitionKey
+	var got string
+	mustNotPanic(t, "zero PartitionKey.String()", func() { got = zero.String() })
+	if got != "" {
+		t.Errorf("zero PartitionKey.String() = %q, want 빈 문자열", got)
+	}
+}

@@ -617,3 +617,61 @@ func TestMDL005_SourceRefValidate(t *testing.T) {
 		})
 	}
 }
+
+// --- v1.3 신설: SignalRef.String()의 항등성 (MDL-036) ---
+
+// MDL-036 (v1.3 신설): 임의의 SignalRef s(유효 여부와 무관, 빈 문자열 포함)에
+// 대해 String()은 string(s)를 그대로 반환한다 — 정규화·트리밍이 없다.
+// 회차 2의 해석 고지 I-7이 v1.3에서 계약으로 승격되었으므로 직접 단정한다.
+func TestMDL036_SignalRefStringIsIdentity(t *testing.T) {
+	corpus := append(validSignalRefStrings(), invalidSignalRefStrings()...)
+	corpus = append(corpus,
+		"",                  // zero value
+		" ",                 // 공백만
+		"   fabric.port   ", // 앞뒤 공백 — 트리밍하지 않는다
+		"\tfabric.port\n",   // 탭·개행
+		"FABRIC.PORT.RATE",  // 대문자 — 소문자화하지 않는다
+		"Fabric.Port",       // 혼합 대소문자
+		"fabric..port",      // 형식 위반
+		"한글.신호",             // 비-ASCII
+		"a.b\x00c",          // 제어 문자
+		"signal.with:colon", // 콜론
+		"signal.with/slash", // 슬래시
+		"...",               // 점만
+	)
+
+	for _, s := range corpus {
+		t.Run(s, func(t *testing.T) {
+			sig := model.SignalRef(s)
+
+			var got string
+			mustNotPanic(t, "SignalRef.String()", func() { got = sig.String() })
+			if got != s {
+				t.Errorf("SignalRef(%q).String() = %q, want %q (항등이어야 한다)", s, got, s)
+			}
+			// 기저 문자열 변환과도 일치한다.
+			if got != string(sig) {
+				t.Errorf("String() = %q, string(SignalRef) = %q — 둘은 같아야 한다", got, string(sig))
+			}
+			// 반복 호출에 안정적이다 (MDL-002).
+			if second := sig.String(); second != got {
+				t.Errorf("String()이 호출마다 달랐다: %q vs %q", got, second)
+			}
+			// 유효성과 무관하다 — IsValid()의 결과가 String()을 바꾸지 않는다.
+			_ = sig.IsValid()
+			if third := sig.String(); third != got {
+				t.Errorf("IsValid() 호출 후 String()이 달라졌다: %q vs %q", got, third)
+			}
+		})
+	}
+}
+
+// MDL-036: zero value SignalRef의 String()은 빈 문자열이다.
+func TestMDL036_ZeroSignalRefStringIsEmpty(t *testing.T) {
+	var zero model.SignalRef
+	var got string
+	mustNotPanic(t, "zero SignalRef.String()", func() { got = zero.String() })
+	if got != "" {
+		t.Errorf("zero SignalRef.String() = %q, want 빈 문자열", got)
+	}
+}
