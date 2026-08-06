@@ -1,3 +1,3 @@
 module github.com/aetertinas9/data-path-assurance
 
-go 1.26.5
+go 1.26.0
