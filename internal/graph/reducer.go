@@ -246,6 +246,14 @@ func (r *Reducer) Run(ctx context.Context) error {
 		}
 		if ev, ok := r.dequeue(); ok {
 			r.apply(ev)
+			// Service a pending tick even when producers keep the queue full.
+			// One receive per application also leaves queue work and cancellation
+			// a turn when ticks arrive continuously.
+			select {
+			case <-ticks:
+				r.publish()
+			default:
+			}
 			continue
 		}
 		select {

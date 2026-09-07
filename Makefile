@@ -60,6 +60,15 @@ arch-check:
 			printf '%s\n' "$$nonstd" | sed 's/^/      /'; \
 		fi; \
 	fi; \
+	for pkg in $$packages; do \
+		case "$$pkg" in "$$module/internal/domains"|"$$module/internal/domains/"*) ;; *) continue ;; esac; \
+		deps="$$(go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' "$$pkg")" || { echo "arch-check: go list -deps $$pkg failed" >&2; exit 1; }; \
+		for dep in $$deps; do \
+			case "$$dep" in "$$pkg"|"$$module/pkg/model"|"$$module/internal/evidence") continue ;; esac; \
+			status=1; \
+			echo "arch-check: FAIL $$pkg reaches dependency outside model/evidence: $$dep"; \
+		done; \
+	done; \
 	if [ $$status -eq 0 ]; then \
 		echo "arch-check: OK"; \
 	fi; \

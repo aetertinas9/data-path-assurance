@@ -310,11 +310,9 @@ func TestIDN063_NewConflictFindingCopiesSlices(t *testing.T) {
 		if !got.Scope[0].Aliases[0].Equal(alias) {
 			t.Errorf("Scope[0].Aliases[0]의 identity가 달라졌다: %#v", got.Scope[0].Aliases[0])
 		}
-		// Raw를 그대로 옮기든 3.1대로 정규화해 버리든, 호출자의 사후 변경이
-		// 반영되어서는 안 된다 (정규화 여부는 3.1·3.5가 함께 규정하지 않는다 —
-		// artifacts/discrepancy-notes-tests.md I-10).
-		if gotRaw := got.Scope[0].Aliases[0].Raw; len(gotRaw) > 0 && gotRaw[0] != 0x01 {
-			t.Errorf("호출자의 Raw 변경이 반영되었다: Raw[0] = %#x, want 0x01", gotRaw[0])
+		// v1.1 §3.5: Scope alias는 반드시 정규화된다.
+		if gotRaw := got.Scope[0].Aliases[0].Raw; gotRaw != nil {
+			t.Errorf("Scope alias Raw = %#v, want nil", gotRaw)
 		}
 	})
 

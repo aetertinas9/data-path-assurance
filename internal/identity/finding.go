@@ -2,6 +2,8 @@ package identity
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/aetertinas9/data-path-assurance/pkg/model"
@@ -51,7 +53,7 @@ func NewConflictFinding(c Conflict, id string, evidence []model.EvidenceRef, see
 	return model.NewFinding(model.Finding{
 		ID:            id,
 		Type:          model.FindingIdentityConflict,
-		Scope:         []model.AssetRef{c.Existing, c.Claimed},
+		Scope:         []model.AssetRef{conflictScopeRef(c.Existing), conflictScopeRef(c.Claimed)},
 		Severity:      model.SeverityWarning,
 		Confidence:    model.ConfidenceHigh,
 		State:         model.StateActive,
@@ -63,6 +65,22 @@ func NewConflictFinding(c Conflict, id string, evidence []model.EvidenceRef, see
 		Explanation:   conflictExplanation(c),
 		SuggestedStep: conflictSuggestedStep,
 	})
+}
+
+// conflictScopeRef also normalizes references from directly assembled
+// conflicts, without changing the caller's aliases.
+func conflictScopeRef(ref model.AssetRef) model.AssetRef {
+	aliases := make([]model.TypedID, 0, len(ref.Aliases))
+	for _, alias := range ref.Aliases {
+		if alias.String() != ref.Canonical {
+			aliases = append(aliases, keyOf(alias).typedID())
+		}
+	}
+	slices.SortFunc(aliases, func(x, y model.TypedID) int {
+		return strings.Compare(x.String(), y.String())
+	})
+	ref.Aliases = aliases
+	return ref
 }
 
 // conflictExplanation states the conflict in the reader's terms, naming the

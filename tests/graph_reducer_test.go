@@ -303,10 +303,9 @@ func TestGRF063_RunLifecycle(t *testing.T) {
 
 		requireErrStopped(t, h.reducer.Offer(grfAssetUpsert(t, p, 1, grfNIC0(t))), "정지 후 Offer")
 
-		// 무효한 이벤트의 Offer도 정지 후에는 거부된다 — 두 오류 계열 중
-		// 어느 쪽이든 nil이어서는 안 된다 (스펙은 우선순위를 규정하지 않는다).
-		if err := h.reducer.Offer(nil); err == nil {
-			t.Errorf("정지 후 Offer(nil)이 nil을 반환했다")
+		// §3.7 Offer 규칙 1은 정지 상태 검사보다 먼저 적용된다.
+		if err := h.reducer.Offer(nil); !errors.Is(err, model.ErrInvalid) {
+			t.Errorf("정지 후 Offer(nil) = %v, want model.ErrInvalid", err)
 		}
 	})
 

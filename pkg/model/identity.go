@@ -68,15 +68,11 @@ func (t TypedID) clone() TypedID {
 	return c
 }
 
-// parseTypedIDString splits the "<Namespace>:<Value>" rendering produced by
-// TypedID.String. The split is at the first colon, because a value may itself
-// contain colons ("pci-bdf:0000:af:00.0").
-func parseTypedIDString(s string) (TypedID, bool) {
-	namespace, value, found := strings.Cut(s, ":")
-	if !found || namespace == "" || value == "" {
-		return TypedID{}, false
-	}
-	return TypedID{Namespace: namespace, Value: value}, true
+// isTypedIDString recognizes a rendering of nonempty Namespace and Value.
+// Either part may contain colons, so the rendering need not have a unique
+// split; any colon with nonempty strings on both sides is sufficient.
+func isTypedIDString(s string) bool {
+	return len(s) >= 3 && strings.Contains(s[1:len(s)-1], ":")
 }
 
 // AssetKind classifies what an asset is. The zero value is not a kind.
@@ -167,7 +163,7 @@ func (a AssetRef) Validate() error {
 	if !a.Kind.IsValid() {
 		return invalidf("AssetRef.Kind %s is not an asset kind", a.Kind)
 	}
-	if _, ok := parseTypedIDString(a.Canonical); !ok {
+	if !isTypedIDString(a.Canonical) {
 		return invalidf("AssetRef.Canonical %q is not of the form <namespace>:<value>", a.Canonical)
 	}
 	for i, alias := range a.Aliases {
