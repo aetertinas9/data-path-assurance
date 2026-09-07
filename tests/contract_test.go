@@ -599,11 +599,13 @@ func TestMDL005_AssetRefValidate(t *testing.T) {
 		{"Kind가 무효", model.AssetRef{Kind: zeroKind, Canonical: canonicalString}, false},
 		{"Canonical이 빔", model.AssetRef{Kind: model.KindNICPort, Canonical: ""}, false},
 		{"Canonical에 구분자가 없음", model.AssetRef{Kind: model.KindNICPort, Canonical: "0000af000"}, false},
-		{"Canonical의 Namespace 부분이 빔", model.AssetRef{Kind: model.KindNICPort, Canonical: ":0000:af:00.0"}, false},
+		{"Canonical의 Namespace 부분이 빔", model.AssetRef{Kind: model.KindNICPort, Canonical: ":x"}, false},
 		{"Canonical의 Value 부분이 빔", model.AssetRef{Kind: model.KindNICPort, Canonical: "pci-bdf:"}, false},
 		{"Canonical이 콜론뿐", model.AssetRef{Kind: model.KindNICPort, Canonical: ":"}, false},
 		{"유효한 Canonical (콜론 1개)", model.AssetRef{Kind: model.KindPod, Canonical: "kubernetes-pod-uid:9f1c"}, true},
 		{"유효한 Canonical (value에 콜론 포함)", model.AssetRef{Kind: model.KindNICPort, Canonical: canonicalString}, true},
+		// Namespace ":0000", Value "af:00.0"의 유효한 model TypedID 렌더링이다.
+		{"유효한 Canonical (namespace와 value에 콜론 포함)", model.AssetRef{Kind: model.KindNICPort, Canonical: ":0000:af:00.0"}, true},
 		{"Aliases가 nil이어도 유효", model.AssetRef{Kind: model.KindPod, Canonical: "kubernetes-pod-uid:9f1c", Aliases: nil}, true},
 		{"Aliases가 빈 슬라이스여도 유효", model.AssetRef{
 			Kind:      model.KindPod,

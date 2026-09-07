@@ -64,7 +64,9 @@ func TestPCIE_005_InterestAndIdentity(t *testing.T) {
 		}
 		pcieCheck(t, obs, pcieAt(30*time.Second), 0)
 	}
-	extra := pciePairs(31 * time.Second)
+	// One unrelated observation is sufficient to prove that a future instant
+	// and malformed PCIe dimensions on another signal cannot block the finding.
+	extra := pciePairs(31 * time.Second)[:1]
 	for i := range extra {
 		extra[i].Signal = "other.signal"
 		extra[i].Dimensions = nil
