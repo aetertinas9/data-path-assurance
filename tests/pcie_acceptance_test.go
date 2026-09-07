@@ -35,12 +35,6 @@ func TestPCIE_002_Constants(t *testing.T) {
 	}
 }
 
-// PCIE-003 requires dependency closure and negative dependency injection checks.
-// Assigned to integration's make arch-check and verifier; source inspection is
-// forbidden in this physically isolated test-author worktree.
-func TestPCIE_003_ArchitectureIntegrationObligation(t *testing.T) {
-	t.Skip("structural AC: integration must run make arch-check and prohibited direct/transitive dependency cases")
-}
 func TestPCIE_004_EmptyAndIndependentFailure(t *testing.T) {
 	if len(pcie.EvaluateLinkWidth(evidence.Window{}, pcieAt(0))) != 0 {
 		t.Fatal("zero window")
