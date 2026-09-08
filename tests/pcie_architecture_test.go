@@ -29,9 +29,10 @@ func TestPCIE_003_ArchitectureBoundaries(t *testing.T) {
 		return text + ")\n"
 	}
 	cases := []struct {
-		name      string
-		files     map[string]string
-		forbidden string
+		name               string
+		files              map[string]string
+		forbidden          string
+		moduleRequirements string
 	}{
 		{
 			name:  "no_domains_package",
@@ -44,6 +45,22 @@ func TestPCIE_003_ArchitectureBoundaries(t *testing.T) {
 				"internal/evidence/fixture.go":     imports(module+"/pkg/model", "time"),
 				"internal/domains/pcie/fixture.go": imports(module+"/pkg/model", module+"/internal/evidence", "sort"),
 			},
+		},
+		{
+			name: "root_domains_allowed_model_evidence",
+			files: map[string]string{
+				"pkg/model/fixture.go":         leaf,
+				"internal/evidence/fixture.go": imports(module + "/pkg/model"),
+				"internal/domains/fixture.go":  imports(module+"/pkg/model", module+"/internal/evidence"),
+			},
+		},
+		{
+			name: "root_domains_graph_rejected",
+			files: map[string]string{
+				"internal/domains/fixture.go": imports(module + "/internal/graph"),
+				"internal/graph/fixture.go":   leaf,
+			},
+			forbidden: module + "/internal/graph",
 		},
 		{
 			name: "direct_graph_rejected",
@@ -86,10 +103,34 @@ func TestPCIE_003_ArchitectureBoundaries(t *testing.T) {
 			forbidden: module + "/internal/helper",
 		},
 	}
+	// Use a core package outside domains so these cases specifically require
+	// the existing global forbidden-import gate, not the domain allowlist.
+	for _, sdk := range []struct{ name, path string }{{"kubernetes", "k8s.io/api"}, {"grpc", "google.golang.org/grpc"}} {
+		for _, transitive := range []bool{false, true} {
+			name := sdk.name + "_direct_from_app"
+			files := map[string]string{
+				"internal/app/fixture.go": imports(sdk.path),
+				"stubs/sdk/go.mod":        "module " + sdk.path + "\n\ngo 1.26.0\n",
+				"stubs/sdk/fixture.go":    leaf,
+			}
+			if transitive {
+				name = sdk.name + "_transitive_from_app"
+				files["internal/app/fixture.go"] = imports(module + "/internal/helper")
+				files["internal/helper/fixture.go"] = imports(sdk.path)
+			}
+			cases = append(cases, struct {
+				name               string
+				files              map[string]string
+				forbidden          string
+				moduleRequirements string
+			}{name: name, files: files, forbidden: sdk.path,
+				moduleRequirements: "\nrequire " + sdk.path + " v0.0.0\nreplace " + sdk.path + " => ./stubs/sdk\n"})
+		}
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			pcieArchWrite(t, root, "go.mod", []byte("module "+module+"\n\ngo 1.26.0\n"))
+			pcieArchWrite(t, root, "go.mod", []byte("module "+module+"\n\ngo 1.26.0\n"+tc.moduleRequirements))
 			pcieArchWrite(t, root, "Makefile", makefile)
 			for path, source := range tc.files {
 				pcieArchWrite(t, root, path, []byte(source))
