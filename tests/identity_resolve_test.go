@@ -173,7 +173,7 @@ func TestIDN043_ResolveIgnoresRawAndSource(t *testing.T) {
 	})
 }
 
-// IDN-044 (edge 집합): ResolveAll의 다섯 갈래.
+// IDN-044 (edge 집합): ResolveAll의 여섯 갈래.
 func TestIDN044_ResolveAll(t *testing.T) {
 	cA, cB := idnCanonicalA(t), idnCanonicalB(t)
 	aliasPort, aliasChassis := idnAliasPort(t), idnAliasChassis(t)
@@ -314,22 +314,30 @@ func TestIDN044_ResolveAll(t *testing.T) {
 		assertSnapshotUnchanged(t, before, resolverSnapshot(t, r, idnSampleProbes(t)...), "ResolveAll(모호)")
 	})
 
-	// 미등록 원소와 모호성이 겹치는 경우의 우선순위는 스펙이 규정하지 않는다
-	// (artifacts/discrepancy-notes-tests.md I-9). 확실한 부분만 단정한다:
-	// 오류가 나고, zero value이며, 상태가 변하지 않는다.
-	t.Run("미등록 + 모호가 겹치면 둘 중 한 계열의 오류", func(t *testing.T) {
-		r := idnSampleResolver(t)
-		before := resolverSnapshot(t, r, idnSampleProbes(t)...)
-
-		got, err := r.ResolveAll([]model.TypedID{cA, cB, unregistered})
-		if err == nil {
-			t.Fatalf("오류를 기대했으나 nil을 받았다 (got %#v)", got)
+	// §3.3·IDN-044(f): 원소 순서와 무관하게 미등록 오류가 다의성보다 우선한다.
+	t.Run("(f) 미등록 + 모호가 겹치면 ErrNotRegistered만 해당", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			ids  []model.TypedID
+		}{
+			{"미등록 첫 원소", []model.TypedID{unregistered, cA, cB}},
+			{"미등록 중간 원소", []model.TypedID{cA, unregistered, cB}},
+			{"미등록 마지막 원소", []model.TypedID{cA, cB, unregistered}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				r := idnSampleResolver(t)
+				before := resolverSnapshot(t, r, idnSampleProbes(t)...)
+				got, err := r.ResolveAll(tc.ids)
+				if !errors.Is(err, identity.ErrNotRegistered) {
+					t.Errorf("ErrNotRegistered를 기대했다 (err=%v)", err)
+				}
+				if errors.Is(err, identity.ErrAmbiguous) {
+					t.Errorf("ErrAmbiguous로 판정되어서는 안 된다 (err=%v)", err)
+				}
+				assertZeroRef(t, got, "ResolveAll(미등록 + 모호)")
+				assertSnapshotUnchanged(t, before, resolverSnapshot(t, r, idnSampleProbes(t)...), "ResolveAll(미등록 + 모호)")
+			})
 		}
-		if !errors.Is(err, identity.ErrNotRegistered) && !errors.Is(err, identity.ErrAmbiguous) {
-			t.Errorf("ErrNotRegistered 또는 ErrAmbiguous를 기대했다 (err=%v)", err)
-		}
-		assertZeroRef(t, got, "ResolveAll(미등록 + 모호)")
-		assertSnapshotUnchanged(t, before, resolverSnapshot(t, r, idnSampleProbes(t)...), "ResolveAll(미등록 + 모호)")
 	})
 }
 
