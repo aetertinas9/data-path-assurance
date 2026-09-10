@@ -99,7 +99,7 @@ func TestGFL_053_054_124_AggregateNodeCompleteReadySet(t *testing.T) {
 
 // GFL-050/GFL-053/GFL-054/GFL-130: partial, conflicting, and empty selections
 // remain Unknown and never synthesize a normal point.
-func TestGFL_050_053_054_130_AggregateNodeSelectionPrecedence(t *testing.T) {
+func TestGFL_050_053_053A_054_130_AggregateNodeSelectionPrecedence(t *testing.T) {
 	now := fleetT0.Add(10 * time.Minute)
 	for _, selection := range []fleet.SelectionState{fleet.SelectionPartial, fleet.SelectionConflict, fleet.SelectionNoDevices} {
 		t.Run(selection.String(), func(t *testing.T) {
@@ -112,8 +112,11 @@ func TestGFL_050_053_054_130_AggregateNodeSelectionPrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("AggregateNode: %v", err)
 			}
-			if got.Qualification != fleet.QualificationUnknown || got.Eligibility != fleet.EligibilityUnknown || got.Selection != selection || got.NormalPointDigest != "" || !got.NormalPointAt.IsZero() {
+			if got.Qualification != fleet.QualificationUnknown || got.Eligibility != fleet.EligibilityUnknown || got.Selection != selection || !got.ValidUntil.IsZero() || got.NormalPointDigest != "" || !got.NormalPointAt.IsZero() {
 				t.Fatalf("selection %s aggregate = %#v", selection.String(), got)
+			}
+			if len(input.Devices) == 1 && input.Devices[0].Decision.Qualification != fleet.QualificationQualified {
+				t.Fatalf("aggregate mutated child qualification: %#v", input.Devices[0].Decision)
 			}
 		})
 	}

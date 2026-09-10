@@ -148,6 +148,21 @@ func TestGFL_007_041_042_124_DeviceReadyRequiresNewCompositePoints(t *testing.T)
 	if !second.AcceptedNormalPoint || second.Phase != fleet.PhaseReady || second.Qualification != fleet.QualificationQualified || second.ValidUntil.IsZero() {
 		t.Fatalf("fresh continuous bundle did not reach Ready: %#v", second)
 	}
+	readyDeadline := second.ValidUntil
+	readyCached, err := fleet.EvaluateDevice(fleetBundle(t, secondAt, 1, fleet.DesiredInService), &second, secondAt.Add(10*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readyCached.Phase != fleet.PhaseReady || readyCached.Qualification != fleet.QualificationQualified || readyCached.AcceptedNormalPoint || !readyCached.ValidUntil.Equal(readyDeadline) {
+		t.Fatalf("fresh cached Ready changed continuity/deadline: %#v", readyCached)
+	}
+	expired, err := fleet.EvaluateDevice(fleetBundle(t, secondAt, 1, fleet.DesiredInService), &readyCached, readyDeadline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.Phase == fleet.PhaseReady || expired.Qualification == fleet.QualificationQualified || expired.AcceptedNormalPoint {
+		t.Fatalf("expired cached bundle remained Ready: %#v", expired)
+	}
 
 	// Returned slices are copies: mutating them cannot corrupt previous opaque continuity.
 	second.Coverage[0].EvidenceIDs[0] = "caller-mutated"
