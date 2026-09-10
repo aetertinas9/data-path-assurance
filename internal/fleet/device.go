@@ -152,7 +152,7 @@ func admissionMatches(b AssessmentBundle) bool {
 	return a.Baseline && a.NodeUID == s.NodeUID && a.BootID == s.BootID && a.PayloadDigest == s.PayloadDigest && a.BundleRevision == s.BundleRevision && a.Session == s.Session && a.Sequence == s.Sequence && a.Completeness == s.Completeness && a.ObservedAt.Equal(s.ObservedAt)
 }
 func bundleMatches(b AssessmentBundle) bool {
-	if b.Snapshot.BundleRevision != b.GraphRevision || b.WindowRevision != b.GraphRevision || b.Topology == nil {
+	if b.Snapshot.NodeUID != b.Intent.Node.UID || b.Snapshot.BundleRevision != b.GraphRevision || b.WindowRevision != b.GraphRevision || b.Topology == nil {
 		return false
 	}
 	seq, ok := b.Topology.Sequence()
@@ -187,7 +187,7 @@ func resolveBinding(b AssessmentBundle, now time.Time) (BindingState, ObservedBi
 	if b.Intent.Claim.Vendor != "NVIDIA" || b.Intent.Claim.UUID == "" {
 		return BindingUnknown, ObservedBinding{}, reasonUntrustedSource, time.Time{}, false
 	}
-	if b.CollectorTrust.ID == "" || b.CollectorTrust.ClusterID != b.Intent.Node.ClusterID || b.CollectorTrust.NodeUID != b.Intent.Node.UID || b.CollectorTrust.Session != b.Snapshot.Session {
+	if b.CollectorTrust.ID == "" || b.CollectorTrust.ClusterID != b.Intent.Node.ClusterID || b.CollectorTrust.NodeUID != b.Intent.Node.UID || b.CollectorTrust.NodeUID != b.Snapshot.NodeUID || b.CollectorTrust.Session != b.Snapshot.Session {
 		return BindingUnknown, ObservedBinding{}, reasonUntrustedSource, time.Time{}, false
 	}
 	var matches []ObservedBinding
