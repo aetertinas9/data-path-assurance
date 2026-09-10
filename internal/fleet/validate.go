@@ -477,6 +477,11 @@ func (d DeviceDecision) Validate() error {
 	if err := requiredTime(d.IntentObservedAt, "DeviceDecision.IntentObservedAt"); err != nil {
 		return err
 	}
+	for value, name := range map[time.Time]string{d.ReadyWindowStartedAt: "DeviceDecision.ReadyWindowStartedAt", d.LastCompositeMin: "DeviceDecision.LastCompositeMin", d.LastCompositeMax: "DeviceDecision.LastCompositeMax"} {
+		if err := optionalTime(value, name); err != nil {
+			return err
+		}
+	}
 	if d.Qualification == QualificationQualified {
 		if err := requiredTime(d.ValidUntil, "DeviceDecision.ValidUntil"); err != nil {
 			return err
@@ -557,6 +562,9 @@ func (n NodeDecision) Validate() error {
 			return err
 		}
 	} else if err := optionalTime(n.ValidUntil, "NodeDecision.ValidUntil"); err != nil {
+		return err
+	}
+	if err := optionalTime(n.NormalPointAt, "NodeDecision.NormalPointAt"); err != nil {
 		return err
 	}
 	if (n.NormalPointAt.IsZero()) != (n.NormalPointDigest == "") {

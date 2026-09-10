@@ -984,7 +984,7 @@ func cloneBundle(b AssessmentBundle) AssessmentBundle {
 	b.Policy.RequiredCoverage = cloneCoverageRequirements(b.Policy.RequiredCoverage)
 	b.Provenance = cloneProvenance(b.Provenance)
 	b.Bindings = cloneBindings(b.Bindings)
-	b.Findings = slices.Clone(b.Findings)
+	b.Findings = cloneFindings(b.Findings)
 	b.Allocation = cloneAllocationBatch(b.Allocation)
 	b.CollectorTrust.Sources = cloneTrusted(b.CollectorTrust.Sources)
 	if b.Fence != nil {

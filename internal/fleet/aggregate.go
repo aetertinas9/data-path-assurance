@@ -21,7 +21,7 @@ func AggregateNode(input AggregateNodeInput, previous *NodeDecision, now time.Ti
 			return NodeDecision{}, invalidf("AggregateNode previous: %v", err)
 		}
 	}
-	devices := slices.Clone(input.Devices)
+	devices := cloneDeviceAggregates(input.Devices)
 	slices.SortFunc(devices, func(a, b DeviceAggregate) int { return strings.Compare(a.DeviceUID, b.DeviceUID) })
 	seen := map[string]struct{}{}
 	for _, a := range devices {

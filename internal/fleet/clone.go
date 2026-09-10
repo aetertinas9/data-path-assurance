@@ -66,6 +66,35 @@ func cloneDecision(d DeviceDecision) DeviceDecision {
 	d.CoverageCursors = slices.Clone(d.CoverageCursors)
 	return d
 }
+func cloneFinding(f model.Finding) model.Finding {
+	f.Scope = make([]model.AssetRef, len(f.Scope))
+	for i, a := range f.Scope {
+		f.Scope[i] = cloneAsset(a)
+	}
+	f.Evidence = slices.Clone(f.Evidence)
+	f.MissingInputs = slices.Clone(f.MissingInputs)
+	f.Affected = make([]model.ImpactRef, len(f.Affected))
+	for i, a := range f.Affected {
+		f.Affected[i] = a
+		f.Affected[i].Asset = cloneAsset(a.Asset)
+	}
+	return f
+}
+func cloneFindings(in []model.Finding) []model.Finding {
+	out := make([]model.Finding, len(in))
+	for i, f := range in {
+		out[i] = cloneFinding(f)
+	}
+	return out
+}
+func cloneDeviceAggregates(in []DeviceAggregate) []DeviceAggregate {
+	out := make([]DeviceAggregate, len(in))
+	for i, a := range in {
+		out[i] = a
+		out[i].Decision = cloneDecision(a.Decision)
+	}
+	return out
+}
 func cloneOwnership(o GateOwnership) GateOwnership {
 	o.Policy.RequiredCoverage = cloneCoverageRequirements(o.Policy.RequiredCoverage)
 	return o
