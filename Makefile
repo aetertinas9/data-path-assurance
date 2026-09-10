@@ -3,7 +3,7 @@
 # Domain core packages, as import-path suffixes. Not all of them exist yet;
 # arch-check inspects whichever ones are present in the tree and ignores the
 # rest, so this list can name packages ahead of their arrival.
-DOMAIN_CORE := pkg/model|internal/identity|internal/graph|internal/evidence|internal/correlation|internal/domains|internal/impact|internal/policy|internal/app
+DOMAIN_CORE := pkg/model|internal/identity|internal/graph|internal/evidence|internal/fleet|internal/correlation|internal/domains|internal/impact|internal/policy|internal/app
 
 # Import paths the domain core must never reach, directly or transitively.
 # The domain core knows nothing about Kubernetes, HTTP, Prometheus, gNMI or
