@@ -388,6 +388,9 @@ func assessCoverage(b AssessmentBundle, binding ObservedBinding, req CoverageReq
 	case "gpu-nic-shared-ancestor":
 		return a
 	case "nic-lldp-remote":
+		if b.CollectorTrust.Mode == TrustModeLive {
+			return a
+		}
 		a.State = CoverageUnsupported
 		a.Reason = "Unsupported"
 		return a
