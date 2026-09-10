@@ -16,6 +16,9 @@ func AdmitSnapshot(admittedSession int64, previous *SnapshotCursor, candidate Sn
 		if err := previous.Validate(); err != nil {
 			return SnapshotCursor{}, 0, invalidf("AdmitSnapshot previous: %v", err)
 		}
+		if !previous.Baseline {
+			return SnapshotCursor{}, 0, invalidf("AdmitSnapshot previous has no admitted baseline")
+		}
 	}
 	if candidate.Session != admittedSession {
 		return unchanged(previous), SnapshotWrongSession, nil
@@ -27,7 +30,16 @@ func AdmitSnapshot(admittedSession int64, previous *SnapshotCursor, candidate Sn
 		return cursorOf(candidate, true), SnapshotAccepted, nil
 	}
 	old := *previous
-	if old.Session != admittedSession || old.NodeUID != candidate.NodeUID || old.BootID != candidate.BootID {
+	if old.NodeUID != candidate.NodeUID {
+		return old, SnapshotWrongSession, nil
+	}
+	if old.Session != admittedSession {
+		if admittedSession <= old.Session || candidate.Sequence != 0 || candidate.Completeness != CompletenessComplete {
+			return old, SnapshotWrongSession, nil
+		}
+		return cursorOf(candidate, true), SnapshotAccepted, nil
+	}
+	if old.BootID != candidate.BootID {
 		return old, SnapshotWrongSession, nil
 	}
 	if candidate.Sequence == old.Sequence {
