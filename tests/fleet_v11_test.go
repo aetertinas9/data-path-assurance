@@ -92,6 +92,61 @@ func TestGFL_020A_DirectAndSwitchObservedContainment(t *testing.T) {
 	}
 }
 
+func fleetAssertNodeScopeNonSuccess(t *testing.T, decision fleet.DeviceDecision, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("structurally valid node-scope mismatch returned error: %v", err)
+	}
+	if decision.BindingState == fleet.BindingBound || decision.Qualification == fleet.QualificationQualified || decision.AcceptedNormalPoint || decision.Phase == fleet.PhaseReady || decision.Phase == fleet.PhaseMaintenanceReady || decision.Phase == fleet.PhaseRetired {
+		t.Fatalf("cross-node evidence produced success: %#v", decision)
+	}
+}
+
+// GFL-011/GFL-012/GFL-025: Intent, trust, binding, admitted snapshot, and graph
+// partition must describe one node scope. A consistently formed foreign-node
+// snapshot remains semantic Unknown, and a reciprocal trust-profile mismatch
+// cannot be overlooked.
+func TestGFL_011_012_025_CrossNodeBundleScopeCannotQualify(t *testing.T) {
+	at := fleetT0.Add(50 * time.Minute)
+	function, root, nodeA := fleetTopologyAssets(t)
+	direct := fleetObservedEdge(t, function, root, model.RelLocatedIn)
+	positive := fleetReplaceTopology(t, fleetBundle(t, at, 0, fleet.DesiredInService), []model.AssetRef{function, root, nodeA}, []graph.Edge{direct})
+	control, err := fleet.EvaluateDevice(positive, nil, at)
+	if err != nil || control.BindingState != fleet.BindingBound || !control.AcceptedNormalPoint {
+		t.Fatalf("direct node-A positive control = %#v/%v", control, err)
+	}
+
+	nodeB := fleetAsset(t, model.KindKubernetesNode, string(model.NamespaceKubernetesNodeUID), "node-b-uid")
+	partitionB, err := graph.PartitionFor(nodeB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateB, err := graph.NewState(partitionB, evidence.Config{MaxAge: time.Minute, Horizon: time.Hour, MaxSamples: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resyncB, err := graph.NewResync(partitionB, positive.Snapshot.Sequence, []model.AssetRef{function, root, nodeB}, []graph.Edge{direct})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateB, _, err = stateB.Apply(resyncB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignSnapshot := positive
+	foreignSnapshot.Topology = stateB.Snapshot()
+	foreignSnapshot.Window = foreignSnapshot.Topology.Window()
+	foreignSnapshot.Snapshot.NodeUID = "node-b-uid"
+	foreignSnapshot.Admitted.NodeUID = "node-b-uid"
+	decision, err := fleet.EvaluateDevice(foreignSnapshot, nil, at)
+	fleetAssertNodeScopeNonSuccess(t, decision, err)
+
+	foreignTrust := positive
+	foreignTrust.CollectorTrust.NodeUID = "node-b-uid"
+	decision, err = fleet.EvaluateDevice(foreignTrust, nil, at)
+	fleetAssertNodeScopeNonSuccess(t, decision, err)
+}
+
 // GFL-020A/GFL-028: wrong direction/relation, cycles, multiple parents, and
 // foreign-node paths are not physical proof for the affected bound function.
 func TestGFL_020A_028_InvalidObservedContainmentIsUnknown(t *testing.T) {
