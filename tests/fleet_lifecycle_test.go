@@ -162,14 +162,14 @@ func TestGFL_007_041_042_124_DeviceReadyRequiresNewCompositePoints(t *testing.T)
 func TestGFL_011_024_040_122_PartialAndUnadmittedSnapshotsStayUnknown(t *testing.T) {
 	at := fleetT0.Add(10 * time.Minute)
 	cases := []struct {
-		name string
-		edit func(*fleet.AssessmentBundle)
-		want string
+		name       string
+		edit       func(*fleet.AssessmentBundle)
+		wantReason string
 	}{
 		{"partial", func(b *fleet.AssessmentBundle) {
 			b.Snapshot.Completeness = fleet.CompletenessPartial
 			b.Admitted.Completeness = fleet.CompletenessPartial
-		}, "PartialSnapshot"},
+		}, ""},
 		{"not admitted", func(b *fleet.AssessmentBundle) { b.Admitted.Baseline = false }, "UnadmittedSnapshot"},
 		{"admitted digest mismatch", func(b *fleet.AssessmentBundle) { b.Admitted.PayloadDigest = "different" }, "UnadmittedSnapshot"},
 	}
@@ -181,8 +181,11 @@ func TestGFL_011_024_040_122_PartialAndUnadmittedSnapshotsStayUnknown(t *testing
 			if err != nil {
 				t.Fatalf("EvaluateDevice: %v", err)
 			}
-			if got.Qualification != fleet.QualificationUnknown || got.Phase != fleet.PhasePending || got.AcceptedNormalPoint || got.Reason != tc.want {
-				t.Fatalf("decision = %#v, want Pending/Unknown/%s", got, tc.want)
+			if got.Qualification != fleet.QualificationUnknown || got.Phase != fleet.PhasePending || got.AcceptedNormalPoint {
+				t.Fatalf("decision = %#v, want Pending/Unknown with no point", got)
+			}
+			if tc.wantReason != "" && got.Reason != tc.wantReason {
+				t.Fatalf("reason = %q, want %q", got.Reason, tc.wantReason)
 			}
 		})
 	}
@@ -294,7 +297,6 @@ func TestGFL_051_122_StaleFindingEvaluationIsUnknown(t *testing.T) {
 // graph revision takes precedence over otherwise normal coverage.
 func TestGFL_040_051_121_ActivePathFindingDegradesDevice(t *testing.T) {
 	at := fleetT0.Add(10 * time.Minute)
-	bundle := fleetBundle(t, at, 0, fleet.DesiredInService)
 	finding, err := model.NewFinding(model.Finding{
 		ID: "finding-width", Type: model.FindingPCIeLinkWidthDegraded, Scope: []model.AssetRef{fleetFunction(t)},
 		Severity: model.SeverityWarning, Confidence: model.ConfidenceHigh, State: model.StateActive,
@@ -304,14 +306,71 @@ func TestGFL_040_051_121_ActivePathFindingDegradesDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle.Findings = []model.Finding{finding}
-	got, err := fleet.EvaluateDevice(bundle, nil, at)
+
+	t.Run("linked current evidence degrades", func(t *testing.T) {
+		bundle := fleetBundle(t, at, 0, fleet.DesiredInService)
+		observation, obsErr := model.NewObservation(model.Observation{
+			ID: "width-ev", Source: bundle.Provenance[0].Source, Subject: fleetFunction(t), Signal: model.SignalRef("pcie.link.width"),
+			Value: model.NewIntValue(8), Unit: "lanes", ObservedAt: at, ReceivedAt: at, ExpiresAt: at.Add(time.Minute), Quality: model.QualityDegraded,
+		})
+		if obsErr != nil {
+			t.Fatal(obsErr)
+		}
+		bundle = fleetBundleWithObservation(t, bundle, observation)
+		bundle.Findings = []model.Finding{finding}
+		got, evalErr := fleet.EvaluateDevice(bundle, nil, at)
+		if evalErr != nil {
+			t.Fatalf("EvaluateDevice: %v", evalErr)
+		}
+		if got.Phase != fleet.PhaseDegraded || got.Qualification != fleet.QualificationDisqualified || len(got.FindingIDs) != 1 || got.FindingIDs[0] != "finding-width" || got.AcceptedNormalPoint {
+			t.Fatalf("active finding decision = %#v", got)
+		}
+	})
+
+	t.Run("unlinked finding is unknown", func(t *testing.T) {
+		bundle := fleetBundle(t, at, 0, fleet.DesiredInService)
+		bundle.Findings = []model.Finding{finding}
+		got, evalErr := fleet.EvaluateDevice(bundle, nil, at)
+		if evalErr != nil {
+			t.Fatalf("EvaluateDevice: %v", evalErr)
+		}
+		if got.Phase == fleet.PhaseDegraded || got.Qualification != fleet.QualificationUnknown || got.AcceptedNormalPoint {
+			t.Fatalf("unlinked finding was treated as current bad evidence: %#v", got)
+		}
+	})
+}
+
+func fleetBundleWithObservation(t *testing.T, bundle fleet.AssessmentBundle, observation model.Observation) fleet.AssessmentBundle {
+	t.Helper()
+	partition := bundle.Topology.Partition()
+	state, err := graph.NewState(partition, evidence.Config{MaxAge: time.Minute, Horizon: time.Hour, MaxSamples: 16})
 	if err != nil {
-		t.Fatalf("EvaluateDevice: %v", err)
+		t.Fatal(err)
 	}
-	if got.Phase != fleet.PhaseDegraded || got.Qualification != fleet.QualificationDisqualified || len(got.FindingIDs) != 1 || got.FindingIDs[0] != "finding-width" || got.AcceptedNormalPoint {
-		t.Fatalf("active finding decision = %#v", got)
+	resync, err := graph.NewResync(partition, bundle.Snapshot.Sequence, bundle.Topology.Assets(), bundle.Topology.Edges())
+	if err != nil {
+		t.Fatal(err)
 	}
+	state, _, err = state.Apply(resync)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence := bundle.Snapshot.Sequence + 1
+	appendEvent, err := graph.NewObservationAppend(partition, sequence, observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err = state.Apply(appendEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle.Topology = state.Snapshot()
+	bundle.Window = bundle.Topology.Window()
+	bundle.Snapshot.Sequence = sequence
+	bundle.Admitted.Sequence = sequence
+	bundle.Snapshot.PayloadDigest = fleetHex('7')
+	bundle.Admitted.PayloadDigest = bundle.Snapshot.PayloadDigest
+	return bundle
 }
 
 func fleetCompletionBundle(t *testing.T, at time.Time, desired fleet.DesiredState) fleet.AssessmentBundle {

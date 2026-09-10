@@ -39,14 +39,18 @@ func TestGFL_000_008_015_078_136_EvaluateDeviceRejectsMalformedInput(t *testing.
 // GFL-000/GFL-078: union-like decision DTOs require a binding only in Bound,
 // allow a zero ValidUntil for non-qualified outcomes, and reject partial state.
 func TestGFL_000_078_DeviceDecisionUnionValidation(t *testing.T) {
-	unknown := fleet.DeviceDecision{
-		Desired: fleet.DesiredInService, Phase: fleet.PhasePending, Qualification: fleet.QualificationUnknown,
-		BindingState: fleet.BindingUnknown, Allocation: fleet.AllocationUnknown, Reason: "UntrustedSource", EvaluatedAt: fleetT0,
-		PolicyRevision: "policy-1", RequestID: "request-1", DeviceUID: "device-a", NodeUID: "node-uid", BootID: "boot-a",
-		TopologyDigest: fleetHex('a'), BaselineDigest: fleetHex('b'), MetadataGeneration: 1, Session: 1, IntentObservedAt: fleetT0,
+	at := fleetT0.Add(time.Minute)
+	bundle := fleetBundle(t, at, 0, fleet.DesiredInService)
+	bundle.CollectorTrust.Sources = bundle.CollectorTrust.Sources[1:]
+	unknown, evalErr := fleet.EvaluateDevice(bundle, nil, at)
+	if evalErr != nil {
+		t.Fatalf("Unknown control evaluation: %v", evalErr)
 	}
 	if err := unknown.Validate(); err != nil {
-		t.Fatalf("valid Unknown decision rejected: %v", err)
+		t.Fatalf("full evaluator-produced Unknown decision rejected: %v (%#v)", err, unknown)
+	}
+	if unknown.GraphRevision == "" || unknown.Qualification != fleet.QualificationUnknown || unknown.BindingState != fleet.BindingUnknown {
+		t.Fatalf("control is not a full non-qualified decision: %#v", unknown)
 	}
 	badUnknown := unknown
 	badUnknown.Binding = fleetBinding(t, fleetT0)

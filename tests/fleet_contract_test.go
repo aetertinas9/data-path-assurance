@@ -116,8 +116,8 @@ func TestGFL_001_002_003_008_009_014_016_078_PublicValidation(t *testing.T) {
 	}
 }
 
-// GFL-007/GFL-008: NewPolicy validates durations and duplicate names, sorts a
-// defensive copy, and does not share nested input or output slices.
+// GFL-007/GFL-008: NewPolicy validates durations and duplicate names, is
+// deterministic, and does not share nested input or output slices.
 func TestGFL_007_008_NewPolicyDefensiveCopyAndDeterminism(t *testing.T) {
 	requirements := []fleet.CoverageRequirement{
 		{Name: "z", PathKind: "gpu-pcie-root", Required: true},
@@ -132,16 +132,25 @@ func TestGFL_007_008_NewPolicyDefensiveCopyAndDeterminism(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(first, second) {
 		t.Fatalf("same policy input was not deterministic: %v / %#v %#v", err, first, second)
 	}
-	if got := []string{first.RequiredCoverage[0].Name, first.RequiredCoverage[1].Name}; !reflect.DeepEqual(got, []string{"a", "z"}) {
-		t.Fatalf("coverage order = %v, want [a z]", got)
-	}
+	firstBeforeInputMutation := append([]fleet.CoverageRequirement(nil), first.RequiredCoverage...)
+	secondBeforeOutputMutation := append([]fleet.CoverageRequirement(nil), second.RequiredCoverage...)
 	requirements[0].Name = "mutated-input"
+	if !reflect.DeepEqual(first.RequiredCoverage, firstBeforeInputMutation) {
+		t.Fatalf("policy shares input slice: %#v", first.RequiredCoverage)
+	}
 	first.RequiredCoverage[0].Name = "mutated-output"
-	third, err := fleet.NewPolicy(input)
+	if !reflect.DeepEqual(second.RequiredCoverage, secondBeforeOutputMutation) {
+		t.Fatalf("constructor results share output slice: %#v", second.RequiredCoverage)
+	}
+	freshInput := fleet.Policy{Revision: "policy-1", RequiredCoverage: []fleet.CoverageRequirement{
+		{Name: "z", PathKind: "gpu-pcie-root", Required: true},
+		{Name: "a", PathKind: "gpu-pcie-parent", Required: true},
+	}, Freshness: time.Minute, ReadyFor: time.Minute}
+	third, err := fleet.NewPolicy(freshInput)
 	if err != nil {
 		t.Fatalf("NewPolicy after output mutation: %v", err)
 	}
-	if third.RequiredCoverage[0].Name != "a" {
+	if !reflect.DeepEqual(third.RequiredCoverage, secondBeforeOutputMutation) {
 		t.Fatalf("policy shared nested storage: %#v", third.RequiredCoverage)
 	}
 

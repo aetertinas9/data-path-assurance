@@ -125,8 +125,13 @@ func TestGFL_026_122_131_AdmitSnapshotRejectOrdersPreserveCursor(t *testing.T) {
 	max.PayloadDigest = "digest-max"
 	candidate := fleetEnvelope(7, 0, fleet.CompletenessComplete, "wrapped", fleetT0.Add(time.Second))
 	got, order, err := fleet.AdmitSnapshot(7, &max, candidate)
-	if err != nil || order != fleet.SnapshotGap || !reflect.DeepEqual(got, max) {
-		t.Fatalf("uint64 wrap = %#v/%s/%v, want unchanged/Gap/nil", got, order.String(), err)
+	if err != nil || order != fleet.SnapshotOutOfOrder || !reflect.DeepEqual(got, max) {
+		t.Fatalf("uint64 wrap = %#v/%s/%v, want unchanged/OutOfOrder/nil", got, order.String(), err)
+	}
+	newSession := fleetEnvelope(8, 0, fleet.CompletenessComplete, "new-session", fleetT0.Add(2*time.Second))
+	got, order, err = fleet.AdmitSnapshot(8, &max, newSession)
+	if err != nil || order != fleet.SnapshotAccepted || got.Session != 8 || got.Sequence != 0 || !got.Baseline {
+		t.Fatalf("new session baseline = %#v/%s/%v, want session-8 sequence-0 Accepted", got, order.String(), err)
 	}
 }
 
