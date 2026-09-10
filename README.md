@@ -41,6 +41,12 @@ management remain the responsibility of operators such as GPU Operator.
 - [Architecture](docs/architecture.md)
 - [Getting started](docs/getting-started.md)
 
+## Acknowledgments
+
+AI assistance: [OpenAI](https://openai.com/) helped with planning, implementation,
+review, and documentation through its AI tools. Project decisions and maintenance
+remain with the repository maintainers.
+
 ## License
 
 [Apache License 2.0](LICENSE).
