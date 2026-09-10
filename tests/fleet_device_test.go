@@ -14,6 +14,7 @@ import (
 // never treats a zero previous pointer as cold start.
 func TestGFL_000_008_015_078_136_EvaluateDeviceRejectsMalformedInput(t *testing.T) {
 	now := fleetT0.Add(time.Minute)
+	valid := fleetBundle(t, now, 0, fleet.DesiredInService)
 	cases := []struct {
 		name     string
 		bundle   fleet.AssessmentBundle
@@ -21,8 +22,9 @@ func TestGFL_000_008_015_078_136_EvaluateDeviceRejectsMalformedInput(t *testing.
 		evalNow  time.Time
 	}{
 		{"zero bundle", fleet.AssessmentBundle{}, nil, now},
-		{"zero now", fleet.AssessmentBundle{}, nil, time.Time{}},
-		{"partial previous", fleet.AssessmentBundle{}, &fleet.DeviceDecision{DeviceUID: "device-a"}, now},
+		{"zero now", valid, nil, time.Time{}},
+		{"zero previous", valid, &fleet.DeviceDecision{}, now},
+		{"partial previous", valid, &fleet.DeviceDecision{DeviceUID: "device-a"}, now},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,26 +129,26 @@ func TestGFL_018_043_044_046_078_085_087_123_125_AllocationFenceValidation(t *te
 	}
 }
 
-// GFL-007: validation and public decision values defensively isolate nested
-// evidence, coverage, workload, and policy slices supplied by callers.
-func TestGFL_007_NestedFleetDTOCopiesAreIndependent(t *testing.T) {
+// GFL-007: an evaluator neither rewrites caller-owned nested input nor exposes
+// result slices that remain linked to those inputs.
+func TestGFL_007_EvaluateDeviceCopiesNestedInputAndOutput(t *testing.T) {
 	at := fleetT0.Add(time.Minute)
-	entries := []fleet.AllocationEntry{{
-		ResourceName: "nvidia.com/gpu", DeviceID: "GPU-abc",
-		Workload: fleet.WorkloadRef{Namespace: "default", Name: "pod-a", UID: "pod-uid", Container: "worker", CreatedAt: at},
-	}}
-	refs := []string{"allocation-ev"}
-	batch := fleet.AllocationBatch{
-		NodeUID: "node-uid", BootID: "boot-a", BundleRevision: "bundle-1", EvidenceDigest: fleetHex('a'), Session: 2, Sequence: 4,
-		ObservedAt: at, ExpiresAt: at.Add(time.Minute), Complete: true, EvidenceRefs: refs,
-		Profile: fleet.AllocationNVIDIAPodResourcesUUID, Entries: entries, CollectorProfileID: "profile-1",
+	bundle := fleetBundle(t, at, 0, fleet.DesiredInService)
+	wantRequirement := bundle.Policy.RequiredCoverage[0]
+	wantEvidence := bundle.Provenance[0].EvidenceID
+	decision, err := fleet.EvaluateDevice(bundle, nil, at)
+	if err != nil {
+		t.Fatalf("EvaluateDevice: %v", err)
 	}
-	if err := batch.Validate(); err != nil {
-		t.Fatalf("AllocationBatch.Validate: %v", err)
+	if bundle.Policy.RequiredCoverage[0] != wantRequirement || bundle.Provenance[0].EvidenceID != wantEvidence {
+		t.Fatalf("evaluator mutated caller input: %#v / %#v", bundle.Policy.RequiredCoverage, bundle.Provenance)
 	}
-	// Validate is observational: it cannot normalize or rewrite caller-owned data.
-	want := batch
-	if err := batch.Validate(); err != nil || !reflect.DeepEqual(batch, want) {
-		t.Fatalf("Validate mutated DTO: %v\n%#v\n%#v", err, batch, want)
+	if len(decision.Coverage) == 0 || len(decision.Coverage[0].EvidenceIDs) == 0 {
+		t.Fatalf("fixture produced no nested result: %#v", decision)
+	}
+	bundle.Policy.RequiredCoverage[0].Name = "mutated-after-call"
+	bundle.Provenance[0].EvidenceID = "mutated-after-call"
+	if decision.Coverage[0].Name == "mutated-after-call" || decision.Coverage[0].EvidenceIDs[0] == "mutated-after-call" {
+		t.Fatalf("result shares nested evaluator input: %#v", decision.Coverage)
 	}
 }

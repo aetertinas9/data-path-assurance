@@ -1,6 +1,8 @@
 package tests_test
 
 import (
+	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -244,7 +246,10 @@ func TestGFL_022_023_040_ProvenanceKindAndExpiry(t *testing.T) {
 		edit func(*fleet.AssessmentBundle)
 	}{
 		{"intended", func(b *fleet.AssessmentBundle) { b.Provenance[0].Kind = fleet.EdgeEvidenceIntended }},
-		{"expired at boundary", func(b *fleet.AssessmentBundle) { b.Provenance[0].ExpiresAt = at }},
+		{"expired at boundary", func(b *fleet.AssessmentBundle) {
+			b.Provenance[0].ObservedAt = at.Add(-time.Second)
+			b.Provenance[0].ExpiresAt = at
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -259,6 +264,15 @@ func TestGFL_022_023_040_ProvenanceKindAndExpiry(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("impossible expiry order is invalid", func(t *testing.T) {
+		bundle := fleetBundle(t, at, 0, fleet.DesiredInService)
+		bundle.Provenance[0].ExpiresAt = bundle.Provenance[0].ObservedAt
+		got, err := fleet.EvaluateDevice(bundle, nil, at)
+		if !errors.Is(err, fleet.ErrInvalidInput) || !reflect.DeepEqual(got, fleet.DeviceDecision{}) {
+			t.Fatalf("got %#v/%v, want zero/ErrInvalidInput", got, err)
+		}
+	})
 }
 
 // GFL-051/GFL-122: stale finding evaluation invalidates required coverage and
@@ -360,6 +374,76 @@ func TestGFL_018_019_043_044_046_047_085_087_088_123_125_138_LifecycleCompletion
 			blocked, err = fleet.EvaluateDevice(mismatchedAllocation, nil, at)
 			if err != nil || blocked.Phase != tc.pending {
 				t.Fatalf("mismatched allocation completed lifecycle: %#v/%v", blocked, err)
+			}
+		})
+	}
+}
+
+func fleetMatchingAllocationEntry(at time.Time, suffix string) fleet.AllocationEntry {
+	return fleet.AllocationEntry{
+		ResourceName: "nvidia.com/gpu", DeviceID: "GPU-abc",
+		Workload: fleet.WorkloadRef{Namespace: "default", Name: "pod-" + suffix, UID: "pod-uid-" + suffix, Container: "worker", CreatedAt: at},
+	}
+}
+
+// GFL-018/GFL-043/GFL-044/GFL-085/GFL-086/GFL-087/GFL-123: one or repeated
+// entries for the exact bound UUID are InUse. Unsupported, partial, stale, or
+// pre-intent allocation evidence and an expired fence cannot complete lifecycle.
+func TestGFL_018_043_044_085_086_087_123_AllocationBoundaries(t *testing.T) {
+	at := fleetT0.Add(10 * time.Minute)
+
+	t.Run("one and repeated bound UUID entries are in use", func(t *testing.T) {
+		for _, entries := range [][]fleet.AllocationEntry{
+			{fleetMatchingAllocationEntry(at, "a")},
+			{fleetMatchingAllocationEntry(at, "a"), fleetMatchingAllocationEntry(at, "b")},
+		} {
+			bundle := fleetCompletionBundle(t, at, fleet.DesiredMaintenance)
+			bundle.Allocation.Entries = entries
+			got, err := fleet.EvaluateDevice(bundle, nil, at)
+			if err != nil {
+				t.Fatalf("EvaluateDevice: %v", err)
+			}
+			if got.Allocation != fleet.AllocationInUse || got.Phase != fleet.PhaseMaintenancePending {
+				t.Fatalf("matching entries = %#v", got)
+			}
+		}
+	})
+
+	cases := []struct {
+		name string
+		edit func(*fleet.AssessmentBundle)
+	}{
+		{"unsupported profile", func(b *fleet.AssessmentBundle) { b.Allocation.Profile = fleet.AllocationUnsupported }},
+		{"unsupported resource", func(b *fleet.AssessmentBundle) {
+			entry := fleetMatchingAllocationEntry(at, "a")
+			entry.ResourceName = "vendor.example/gpu"
+			b.Allocation.Entries = []fleet.AllocationEntry{entry}
+		}},
+		{"partial batch", func(b *fleet.AssessmentBundle) { b.Allocation.Complete = false }},
+		{"stale batch", func(b *fleet.AssessmentBundle) {
+			b.Allocation.ObservedAt = at.Add(-time.Second)
+			b.Allocation.ExpiresAt = at
+		}},
+		{"pre-intent batch", func(b *fleet.AssessmentBundle) {
+			b.Policy.Freshness = 2 * time.Minute
+			b.Allocation.ObservedAt = b.Intent.ObservedAt.Add(-time.Second)
+			b.Allocation.ExpiresAt = at.Add(time.Minute)
+		}},
+		{"expired fence", func(b *fleet.AssessmentBundle) {
+			b.Fence.ObservedAt = at.Add(-time.Second)
+			b.Fence.ExpiresAt = at
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := fleetCompletionBundle(t, at, fleet.DesiredMaintenance)
+			tc.edit(&bundle)
+			got, err := fleet.EvaluateDevice(bundle, nil, at)
+			if err != nil {
+				t.Fatalf("EvaluateDevice: %v", err)
+			}
+			if got.Phase == fleet.PhaseMaintenanceReady {
+				t.Fatalf("insufficient allocation/fence completed lifecycle: %#v", got)
 			}
 		})
 	}

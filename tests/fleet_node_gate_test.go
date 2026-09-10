@@ -163,7 +163,14 @@ func fleetOwnership(phase fleet.CleanupPhase) fleet.GateOwnership {
 }
 
 func fleetGateNode(now time.Time, eligibility fleet.Eligibility, qualification fleet.Qualification, selection fleet.SelectionState) fleet.NodeDecision {
-	return fleet.NodeDecision{NodeUID: "node-uid", FleetUID: "fleet-uid", Qualification: qualification, Eligibility: eligibility, Selection: selection, DeviceCount: 1, AssessmentRevision: fleetHex('d'), EvaluatedAt: now, ValidUntil: now.Add(time.Minute)}
+	decision := fleet.NodeDecision{NodeUID: "node-uid", FleetUID: "fleet-uid", Qualification: qualification, Eligibility: eligibility, Selection: selection, DeviceCount: 1, AssessmentRevision: fleetHex('d'), EvaluatedAt: now}
+	if qualification == fleet.QualificationQualified {
+		decision.ValidUntil = now.Add(time.Minute)
+	}
+	if selection == fleet.SelectionNoDevices {
+		decision.DeviceCount = 0
+	}
+	return decision
 }
 
 // GFL-015/GFL-066/GFL-068/GFL-079/GFL-130/GFL-134: gate precedence is
@@ -302,12 +309,180 @@ func TestGFL_068_069_076_134_EvaluateGateReleaseContinuity(t *testing.T) {
 	})
 }
 
+// GFL-076: a future normal-point timestamp is not a release point even if its
+// digest is new and the persisted interval would otherwise satisfy ReadyFor.
+func TestGFL_076_FutureNormalPointResetsGateRecovery(t *testing.T) {
+	now := fleetT0.Add(40 * time.Minute)
+	ownership := fleetOwnership(fleet.CleanupNone)
+	ownership.RecoveryStartedAt = now.Add(-time.Minute)
+	ownership.LastRecoveryPointAt = now.Add(-time.Minute)
+	ownership.RecoveryControllerID = "controller-a"
+	ownership.LastRecoveryDigest = fleetHex('a')
+	previous := fleet.GateDecision{Action: fleet.GateActionMaintain, Ownership: ownership, Reason: "Validating", EvaluatedAt: now.Add(-time.Minute)}
+	point := fleetGateNode(now, fleet.EligibilityEligible, fleet.QualificationQualified, fleet.SelectionComplete)
+	point.ValidUntil = now.Add(time.Minute)
+	point.NormalPointAt = now.Add(time.Second)
+	point.NormalPointDigest = fleetHex('b')
+	input := fleet.GateInput{Mode: fleet.GateModeEnforce, FleetUID: "fleet-uid", ControllerID: "controller-a", Node: fleet.NodeRef{ClusterID: "cluster-a", Name: "node-a", UID: "node-uid"}, Policy: fleetCleanupPolicy(), NodeDecision: point, Ownership: ownership}
+	got, err := fleet.EvaluateGate(input, &previous, now)
+	if err != nil {
+		t.Fatalf("EvaluateGate: %v", err)
+	}
+	if got.Action != fleet.GateActionMaintain || !got.Ownership.RecoveryStartedAt.IsZero() || !got.Ownership.LastRecoveryPointAt.IsZero() || got.Ownership.LastRecoveryDigest != "" {
+		t.Fatalf("future point did not retain gate/reset recovery: %#v", got)
+	}
+}
+
+// GFL-076: a fresh cached middle evaluation preserves the accepted recovery
+// window but does not advance it; a later distinct point completes the original window.
+func TestGFL_076_CachedGatePointPreservesButDoesNotAdvanceRecovery(t *testing.T) {
+	base := fleetT0.Add(40 * time.Minute)
+	policy := fleetCleanupPolicy()
+	policy.Freshness = 2 * time.Minute
+	policy.ReadyFor = 2 * time.Minute
+	ownership := fleetOwnership(fleet.CleanupNone)
+	ownership.Policy = policy
+	node := fleet.NodeRef{ClusterID: "cluster-a", Name: "node-a", UID: "node-uid"}
+
+	firstPoint := fleetGateNode(base, fleet.EligibilityEligible, fleet.QualificationQualified, fleet.SelectionComplete)
+	firstPoint.ValidUntil = base.Add(3 * time.Minute)
+	firstPoint.NormalPointAt = base
+	firstPoint.NormalPointDigest = fleetHex('a')
+	firstInput := fleet.GateInput{Mode: fleet.GateModeEnforce, FleetUID: "fleet-uid", ControllerID: "controller-a", Node: node, Policy: policy, NodeDecision: firstPoint, Ownership: ownership}
+	first, err := fleet.EvaluateGate(firstInput, nil, base)
+	if err != nil || first.Action == fleet.GateActionRemove {
+		t.Fatalf("first point = %#v/%v", first, err)
+	}
+
+	cachedPoint := firstPoint
+	cachedPoint.EvaluatedAt = base.Add(time.Minute)
+	cachedPoint.ValidUntil = base.Add(3 * time.Minute)
+	cachedInput := firstInput
+	cachedInput.NodeDecision = cachedPoint
+	cachedInput.Ownership = first.Ownership
+	cached, err := fleet.EvaluateGate(cachedInput, &first, base.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("cached point: %v", err)
+	}
+	if cached.Action == fleet.GateActionRemove || !cached.Ownership.RecoveryStartedAt.Equal(first.Ownership.RecoveryStartedAt) || !cached.Ownership.LastRecoveryPointAt.Equal(first.Ownership.LastRecoveryPointAt) || cached.Ownership.LastRecoveryDigest != first.Ownership.LastRecoveryDigest {
+		t.Fatalf("cached point advanced or reset recovery: first=%#v cached=%#v", first, cached)
+	}
+
+	lastNow := base.Add(2 * time.Minute)
+	newPoint := fleetGateNode(lastNow, fleet.EligibilityEligible, fleet.QualificationQualified, fleet.SelectionComplete)
+	newPoint.ValidUntil = lastNow.Add(time.Minute)
+	newPoint.NormalPointAt = lastNow
+	newPoint.NormalPointDigest = fleetHex('b')
+	lastInput := firstInput
+	lastInput.NodeDecision = newPoint
+	lastInput.Ownership = cached.Ownership
+	last, err := fleet.EvaluateGate(lastInput, &cached, lastNow)
+	if err != nil || last.Action != fleet.GateActionRemove {
+		t.Fatalf("new point did not complete original window: %#v/%v", last, err)
+	}
+}
+
+// GFL-068/GFL-076: Unknown, conflict, and no-device interruptions retain an
+// existing gate, clear recovery, and force a fresh release window.
+func TestGFL_068_076_InterruptedGateRecoveryRestarts(t *testing.T) {
+	base := fleetT0.Add(40 * time.Minute)
+	node := fleet.NodeRef{ClusterID: "cluster-a", Name: "node-a", UID: "node-uid"}
+	for _, tc := range []struct {
+		name      string
+		selection fleet.SelectionState
+	}{
+		{"unknown", fleet.SelectionPartial},
+		{"conflict", fleet.SelectionConflict},
+		{"no devices", fleet.SelectionNoDevices},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ownership := fleetOwnership(fleet.CleanupNone)
+			ownership.RecoveryStartedAt = base.Add(-time.Minute)
+			ownership.LastRecoveryPointAt = base.Add(-time.Minute)
+			ownership.RecoveryControllerID = "controller-a"
+			ownership.LastRecoveryDigest = fleetHex('a')
+			previous := fleet.GateDecision{Action: fleet.GateActionMaintain, Ownership: ownership, Reason: "Validating", EvaluatedAt: base.Add(-time.Minute)}
+			interruptedNode := fleetGateNode(base, fleet.EligibilityUnknown, fleet.QualificationUnknown, tc.selection)
+			input := fleet.GateInput{Mode: fleet.GateModeEnforce, FleetUID: "fleet-uid", ControllerID: "controller-a", Node: node, Policy: fleetCleanupPolicy(), NodeDecision: interruptedNode, Ownership: ownership}
+			interrupted, err := fleet.EvaluateGate(input, &previous, base)
+			if err != nil {
+				t.Fatalf("interruption: %v", err)
+			}
+			if interrupted.Action != fleet.GateActionMaintain || !interrupted.Ownership.RecoveryStartedAt.IsZero() || interrupted.Ownership.LastRecoveryDigest != "" {
+				t.Fatalf("interruption did not maintain/reset: %#v", interrupted)
+			}
+
+			nextNow := base.Add(time.Minute)
+			nextPoint := fleetGateNode(nextNow, fleet.EligibilityEligible, fleet.QualificationQualified, fleet.SelectionComplete)
+			nextPoint.NormalPointAt = nextNow
+			nextPoint.NormalPointDigest = fleetHex('b')
+			nextInput := input
+			nextInput.NodeDecision = nextPoint
+			nextInput.Ownership = interrupted.Ownership
+			next, err := fleet.EvaluateGate(nextInput, &interrupted, nextNow)
+			if err != nil || next.Action == fleet.GateActionRemove {
+				t.Fatalf("first point after interruption released gate: %#v/%v", next, err)
+			}
+		})
+	}
+}
+
+// GFL-079: current fleet/node scope and the full previous/input ownership tuple
+// are validation preconditions, independent of gate eligibility.
+func TestGFL_079_EvaluateGateRejectsScopeAndOwnershipMismatch(t *testing.T) {
+	now := fleetT0.Add(40 * time.Minute)
+	node := fleet.NodeRef{ClusterID: "cluster-a", Name: "node-a", UID: "node-uid"}
+	validNodeDecision := fleetGateNode(now, fleet.EligibilityUnknown, fleet.QualificationUnknown, fleet.SelectionPartial)
+	validEnforce := fleet.GateInput{Mode: fleet.GateModeEnforce, FleetUID: "fleet-uid", ControllerID: "controller-a", Node: node, Policy: fleetCleanupPolicy(), NodeDecision: validNodeDecision}
+	if _, err := fleet.EvaluateGate(validEnforce, nil, now); err != nil {
+		t.Fatalf("valid enforce control: %v", err)
+	}
+	cleanupOwnership := fleetOwnership(fleet.CleanupPending)
+	cleanupOwnership.CleanupRequestedAt = now.Add(-time.Minute)
+	validCleanup := fleet.GateInput{Mode: fleet.GateModeCleanup, FleetUID: "fleet-uid", ControllerID: "controller-a", Node: node, NodeDecision: validNodeDecision, Ownership: cleanupOwnership}
+	if _, err := fleet.EvaluateGate(validCleanup, nil, now); err != nil {
+		t.Fatalf("valid cleanup control: %v", err)
+	}
+
+	otherFleet := validEnforce
+	otherFleet.NodeDecision.FleetUID = "other-fleet"
+	wrongNode := validCleanup
+	wrongNode.Ownership.NodeUID = "other-node"
+	matchingInput := validEnforce
+	matchingInput.Ownership = fleetOwnership(fleet.CleanupNone)
+	previousOwnership := matchingInput.Ownership
+	previousOwnership.OwnerFleetUID = "other-fleet"
+	mismatchedPrevious := fleet.GateDecision{Action: fleet.GateActionMaintain, Ownership: previousOwnership, Reason: "Validating", EvaluatedAt: now.Add(-time.Second)}
+
+	for _, tc := range []struct {
+		name     string
+		input    fleet.GateInput
+		previous *fleet.GateDecision
+	}{
+		{"node decision fleet", otherFleet, nil},
+		{"cleanup target node", wrongNode, nil},
+		{"previous ownership tuple", matchingInput, &mismatchedPrevious},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := fleet.EvaluateGate(tc.input, tc.previous, now)
+			if !errors.Is(err, fleet.ErrInvalidInput) || !reflect.DeepEqual(got, fleet.GateDecision{}) {
+				t.Fatalf("got %#v/%v, want zero/ErrInvalidInput", got, err)
+			}
+		})
+	}
+}
+
 // GFL-053: duplicate device UIDs and outer/inner identity mismatches are invalid
 // rather than silently aggregated.
 func TestGFL_053_AggregateNodeRejectsDuplicateAndMismatchedDevices(t *testing.T) {
 	now := fleetT0.Add(10 * time.Minute)
 	d := fleetReadyDevice(t, now, "device-a")
 	base := fleet.AggregateNodeInput{Node: d.Binding.Node, FleetUID: "fleet-uid", Selection: fleet.SelectionComplete}
+	control := base
+	control.Devices = []fleet.DeviceAggregate{{DeviceUID: d.DeviceUID, NodeUID: d.NodeUID, Desired: d.Desired, MetadataGeneration: d.MetadataGeneration, Decision: d}}
+	if _, err := fleet.AggregateNode(control, nil, now); err != nil {
+		t.Fatalf("valid control rejected: %v", err)
+	}
 	cases := []struct {
 		name    string
 		devices []fleet.DeviceAggregate
@@ -333,7 +508,11 @@ func TestGFL_053_AggregateNodeRejectsDuplicateAndMismatchedDevices(t *testing.T)
 func TestGFL_015_079_136_EvaluateGateRejectsInvalidPrevious(t *testing.T) {
 	now := fleetT0.Add(20 * time.Minute)
 	input := fleet.GateInput{Mode: fleet.GateModeEnforce, FleetUID: "fleet-uid", ControllerID: "controller-a", Node: fleet.NodeRef{ClusterID: "cluster-a", Name: "node-a", UID: "node-uid"}, Policy: fleetCleanupPolicy(), NodeDecision: fleetGateNode(now, fleet.EligibilityUnknown, fleet.QualificationUnknown, fleet.SelectionPartial)}
-	for _, previous := range []*fleet.GateDecision{{}, {Action: fleet.GateActionMaintain, Ownership: fleetOwnership(fleet.CleanupNone), Reason: "Unknown", EvaluatedAt: now}} {
+	control, err := fleet.EvaluateGate(input, nil, now)
+	if err != nil {
+		t.Fatalf("valid control rejected: %v", err)
+	}
+	for _, previous := range []*fleet.GateDecision{{}, &control} {
 		got, err := fleet.EvaluateGate(input, previous, now)
 		if !errors.Is(err, fleet.ErrInvalidInput) || !reflect.DeepEqual(got, fleet.GateDecision{}) {
 			t.Errorf("invalid previous returned %#v/%v, want zero/ErrInvalidInput", got, err)
