@@ -43,9 +43,9 @@ management remain the responsibility of operators such as GPU Operator.
 
 ## Acknowledgments
 
-AI assistance: [OpenAI](https://openai.com/) helped with planning, implementation,
-review, and documentation through its AI tools. Project decisions and maintenance
-remain with the repository maintainers.
+AI assistance: [Codex](https://github.com/codex), OpenAI's coding agent, helped
+with planning, implementation, review, and documentation. Project decisions and
+maintenance remain with the repository maintainers.
 
 ## License
 
