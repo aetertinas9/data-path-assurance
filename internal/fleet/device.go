@@ -4,11 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"math"
+	"math/big"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/aetertinas9/data-path-assurance/internal/domains/pcie"
+	"github.com/aetertinas9/data-path-assurance/internal/evidence"
 	"github.com/aetertinas9/data-path-assurance/internal/graph"
 	"github.com/aetertinas9/data-path-assurance/pkg/model"
 )
@@ -156,7 +159,11 @@ func bundleMatches(b AssessmentBundle) bool {
 	if !ok || seq != b.Snapshot.Sequence || !b.Topology.Synced() {
 		return false
 	}
-	expectedPartition := model.PartitionKey(model.KindKubernetesNode.String() + "/" + model.NamespaceKubernetesNodeUID + ":" + b.Snapshot.NodeUID)
+	nodeAnchor := model.AssetRef{Kind: model.KindKubernetesNode, Canonical: model.NamespaceKubernetesNodeUID + ":" + b.Snapshot.NodeUID}
+	expectedPartition, err := graph.PartitionFor(nodeAnchor)
+	if err != nil {
+		return false
+	}
 	if b.Topology.Partition() != expectedPartition {
 		return false
 	}
@@ -291,9 +298,6 @@ func evaluateQualification(b AssessmentBundle, binding ObservedBinding, now time
 		}
 		q.coverage = append(q.coverage, a)
 		q.evidenceIDs = append(q.evidenceIDs, a.EvidenceIDs...)
-		if a.State != CoverageNormal {
-			q.allNormal = false
-		}
 		if a.State == CoverageMissing && req.Required {
 			q.anyMissing = true
 		}
@@ -382,7 +386,7 @@ func assessCoverage(b AssessmentBundle, binding ObservedBinding, req CoverageReq
 	case "gpu-pcie-link-width-normal":
 		return assessWidth(b, binding, req, now)
 	case "gpu-nic-shared-ancestor":
-		return assessSingleRelation(b, binding, req, now, model.RelSharesFailureDomainWith, TrustSysfsPhysicalParent)
+		return a
 	case "nic-lldp-remote":
 		a.State = CoverageUnsupported
 		a.Reason = "Unsupported"
@@ -404,12 +408,13 @@ func assessPath(b AssessmentBundle, binding ObservedBinding, req CoverageRequire
 		edges, _ := b.Topology.EdgesFrom(current)
 		var observedParents []graph.Edge
 		for _, e := range edges {
-			if e.Relation == model.RelUpstreamOf && e.Origin == model.OriginObserved {
+			if e.Relation == model.RelLocatedIn && e.Origin == model.OriginObserved {
 				observedParents = append(observedParents, e)
 			}
 		}
 		if len(observedParents) > 1 {
 			a.Reason = "TopologyConflict"
+			a.EvidenceIDs = provenanceIDsForEdges(b.Provenance, observedParents)
 			return a
 		}
 		var parents []EdgeProvenance
@@ -447,12 +452,20 @@ func assessPath(b AssessmentBundle, binding ObservedBinding, req CoverageRequire
 		}
 		proofs = append(proofs, p)
 		current = p.Edge.To
+		stored, err := b.Topology.Asset(current)
+		if err != nil || stored.Key() == "" || stored.Key() != current.Key() {
+			a.Reason = "TopologyConflict"
+			a.EvidenceIDs = provenanceIDs(proofs)
+			return a
+		}
 		if current.Kind != model.KindPCIeSwitch && current.Kind != model.KindPCIeRootPort {
 			a.Reason = "TopologyConflict"
+			a.EvidenceIDs = provenanceIDs(proofs)
 			return a
 		}
 		if _, ok := seen[current.Key()]; ok {
 			a.Reason = "TopologyConflict"
+			a.EvidenceIDs = provenanceIDs(proofs)
 			return a
 		}
 		seen[current.Key()] = struct{}{}
@@ -469,40 +482,23 @@ func assessPath(b AssessmentBundle, binding ObservedBinding, req CoverageRequire
 	}
 	return normalCoverage(a, proofs, b.Policy.Freshness)
 }
-func assessSingleRelation(b AssessmentBundle, binding ObservedBinding, req CoverageRequirement, now time.Time, rel model.EdgeRelation, cap TrustCapability) CoverageAssessment {
-	a := CoverageAssessment{Name: req.Name, PathKind: req.PathKind, State: CoverageUnknown, Reason: reasonCoverageUnknown, AssessmentSequence: b.Snapshot.Sequence}
-	if !hasCapability(b.CollectorTrust, cap) {
-		a.State = CoverageUnsupported
-		a.Reason = "Unsupported"
-		return a
+func provenanceIDs(proofs []EdgeProvenance) []string {
+	ids := make([]string, 0, len(proofs))
+	for _, p := range proofs {
+		ids = append(ids, p.EvidenceID)
 	}
-	edges, _ := b.Topology.EdgesFrom(binding.Function)
-	foundRelation := false
+	return sortedUnique(ids)
+}
+func provenanceIDsForEdges(all []EdgeProvenance, edges []graph.Edge) []string {
+	var ids []string
 	for _, e := range edges {
-		if e.Relation != rel {
-			continue
+		for _, p := range all {
+			if p.Kind == EdgeEvidenceObserved && sameEdge(p.Edge, e) {
+				ids = append(ids, p.EvidenceID)
+			}
 		}
-		foundRelation = true
-		p, ok := findProvenance(b.Provenance, e, EdgeEvidenceInferred)
-		if !ok || !trusted(b.CollectorTrust, cap, p.Source) || p.CollectorProfileID != b.CollectorTrust.ID {
-			continue
-		}
-		if p.ObservedAt.After(now) {
-			a.Reason = reasonFutureObservation
-			return a
-		}
-		if p.ObservedAt.Before(b.Intent.ObservedAt) || !fresh(p.ObservedAt, p.ExpiresAt, b.Policy.Freshness, now) {
-			continue
-		}
-		return normalCoverage(a, []EdgeProvenance{p}, b.Policy.Freshness)
 	}
-	if foundRelation {
-		a.Reason = reasonUntrustedSource
-		return a
-	}
-	a.State = CoverageMissing
-	a.Reason = reasonCoverageMissing
-	return a
+	return sortedUnique(ids)
 }
 func findProvenance(all []EdgeProvenance, e graph.Edge, kind EdgeEvidenceKind) (EdgeProvenance, bool) {
 	var found EdgeProvenance
@@ -550,81 +546,223 @@ func assessWidth(b AssessmentBundle, binding ObservedBinding, req CoverageRequir
 		a.Reason = "Unsupported"
 		return a
 	}
-	type reading struct{ o model.Observation }
-	var currents, expected []reading
+	type reading struct {
+		o      model.Observation
+		series evidence.Series
+	}
+	var readings []reading
 	for _, sig := range []model.SignalRef{pcie.SignalLinkWidthCurrent, pcie.SignalLinkWidthExpected} {
 		series, err := b.Window.SeriesFor(binding.Function, sig)
 		if err != nil {
 			continue
 		}
 		for _, s := range series {
-			if !trusted(b.CollectorTrust, TrustSysfsPCIeWidth, s.Source()) {
-				continue
-			}
 			o, ok := s.Latest()
 			if !ok {
 				continue
 			}
-			if sig == pcie.SignalLinkWidthCurrent {
-				currents = append(currents, reading{o})
-			} else {
-				expected = append(expected, reading{o})
-			}
+			readings = append(readings, reading{o: o, series: s})
 		}
 	}
-	for _, c := range currents {
-		for _, e := range expected {
-			if c.o.Source != e.o.Source || !c.o.ObservedAt.Equal(e.o.ObservedAt) || !mapsEqual(c.o.Dimensions, e.o.Dimensions) {
-				continue
-			}
-			if c.o.Quality != model.QualityGood || e.o.Quality != model.QualityGood || c.o.Unit != pcie.UnitLinkWidth || e.o.Unit != pcie.UnitLinkWidth || len(c.o.Dimensions) != 4 {
-				continue
-			}
-			if !validWidthDimensions(c.o.Dimensions) {
-				continue
-			}
-			if c.o.ObservedAt.After(now) {
-				a.Reason = reasonFutureObservation
-				return a
-			}
-			if c.o.ObservedAt.Before(b.Intent.ObservedAt) || !fresh(c.o.ObservedAt, c.o.ExpiresAt, b.Policy.Freshness, now) || !fresh(e.o.ObservedAt, e.o.ExpiresAt, b.Policy.Freshness, now) {
-				continue
-			}
-			provenance := c.o.Dimensions[pcie.DimensionExpectedProvenance]
-			if provenance != pcie.ProvenanceAdjacentCapabilityMin && provenance != pcie.ProvenanceOperatorVerifiedWiring {
-				continue
-			}
-			if provenance == pcie.ProvenanceOperatorVerifiedWiring && !trusted(b.CollectorTrust, TrustOperatorBaseline, e.o.Source) {
-				a.Reason = reasonUntrustedSource
-				return a
-			}
-			cv, cok := number(c.o.Value)
-			ev, eok := number(e.o.Value)
-			if !cok || !eok || cv < ev {
-				a.State = CoverageMissing
-				a.Reason = reasonCoverageMissing
-				return a
-			}
-			a.State = CoverageNormal
-			a.Reason = "Normal"
-			a.EvidenceIDs = sortedUnique([]string{c.o.ID, e.o.ID})
-			a.ObservedAt = c.o.ObservedAt
-			a.LatestObservedAt = c.o.ObservedAt
-			a.ExpiresAt = minTime(deadline(c.o.ObservedAt, c.o.ExpiresAt, b.Policy.Freshness), deadline(e.o.ObservedAt, e.o.ExpiresAt, b.Policy.Freshness))
-			return a
+	if len(readings) == 0 {
+		return a
+	}
+	latest := readings[0].o.ObservedAt
+	for _, r := range readings[1:] {
+		if r.o.ObservedAt.After(latest) {
+			latest = r.o.ObservedAt
 		}
 	}
-	a.State = CoverageMissing
-	a.Reason = reasonCoverageMissing
+	if latest.After(now) {
+		a.Reason = reasonFutureObservation
+		return a
+	}
+	bySource := map[model.SourceRef][]reading{}
+	for _, r := range readings {
+		bySource[r.o.Source] = append(bySource[r.o.Source], r)
+	}
+	sources := make([]model.SourceRef, 0, len(bySource))
+	for source := range bySource {
+		sources = append(sources, source)
+	}
+	slices.SortFunc(sources, func(x, y model.SourceRef) int {
+		if c := strings.Compare(x.Type, y.Type); c != 0 {
+			return c
+		}
+		return strings.Compare(x.Name, y.Name)
+	})
+	var expectedWidth *big.Int
+	var expectedDimensions map[string]string
+	var referenceNormal *bool
+	latestPairFound := false
+	for _, source := range sources {
+		sourceLatest := bySource[source][0].o.ObservedAt
+		for _, r := range bySource[source][1:] {
+			if r.o.ObservedAt.After(sourceLatest) {
+				sourceLatest = r.o.ObservedAt
+			}
+		}
+		atGlobalLatest := sourceLatest.Equal(latest)
+		if !trusted(b.CollectorTrust, TrustSysfsPCIeWidth, source) {
+			if atGlobalLatest {
+				return widthUnknown(a, reasonUntrustedSource)
+			}
+			continue
+		}
+		var batch []reading
+		for _, r := range bySource[source] {
+			if r.o.ObservedAt.Equal(sourceLatest) {
+				batch = append(batch, r)
+			}
+		}
+		if len(batch) != 2 {
+			if atGlobalLatest {
+				return widthUnknown(a, reasonBundleMismatch)
+			}
+			continue
+		}
+		var current, expected reading
+		var currentCount, expectedCount int
+		for _, r := range batch {
+			switch r.o.Signal {
+			case pcie.SignalLinkWidthCurrent:
+				current = r
+				currentCount++
+			case pcie.SignalLinkWidthExpected:
+				expected = r
+				expectedCount++
+			}
+		}
+		if currentCount != 1 || expectedCount != 1 || !mapsEqual(current.o.Dimensions, expected.o.Dimensions) {
+			if atGlobalLatest {
+				return widthUnknown(a, reasonBundleMismatch)
+			}
+			continue
+		}
+		if !validWidthDimensions(current.o.Dimensions, binding.Function) {
+			if atGlobalLatest {
+				return widthUnknown(a, reasonCoverageUnknown)
+			}
+			continue
+		}
+		if current.o.Dimensions[pcie.DimensionExpectedProvenance] == pcie.ProvenanceOperatorVerifiedWiring && !trusted(b.CollectorTrust, TrustOperatorBaseline, source) {
+			if atGlobalLatest {
+				return widthUnknown(a, reasonUntrustedSource)
+			}
+			continue
+		}
+		cv, ev, ok := validateWidthPair(current, expected, b, now)
+		if !ok {
+			if atGlobalLatest {
+				return widthUnknown(a, reasonCoverageUnknown)
+			}
+			continue
+		}
+		if expectedWidth == nil {
+			expectedWidth = new(big.Int).Set(ev)
+			expectedDimensions = current.o.Dimensions
+		} else if expectedWidth.Cmp(ev) != 0 || !mapsEqual(expectedDimensions, current.o.Dimensions) {
+			return widthUnknown(a, reasonBundleMismatch)
+		}
+		thisNormal := cv.Cmp(ev) >= 0
+		if referenceNormal == nil {
+			x := thisNormal
+			referenceNormal = &x
+		} else if *referenceNormal != thisNormal {
+			return widthUnknown(a, reasonBundleMismatch)
+		}
+		if atGlobalLatest {
+			latestPairFound = true
+			a.EvidenceIDs = append(a.EvidenceIDs, current.o.ID, expected.o.ID)
+			a.ExpiresAt = minTime(a.ExpiresAt, minTime(deadline(current.o.ObservedAt, current.o.ExpiresAt, b.Policy.Freshness), deadline(expected.o.ObservedAt, expected.o.ExpiresAt, b.Policy.Freshness)))
+		}
+	}
+	if !latestPairFound || referenceNormal == nil {
+		return a
+	}
+	if !*referenceNormal {
+		a.State = CoverageMissing
+		a.Reason = reasonCoverageMissing
+		a.EvidenceIDs = sortedUnique(a.EvidenceIDs)
+		a.ObservedAt = latest
+		a.LatestObservedAt = latest
+		return a
+	}
+	a.State = CoverageNormal
+	a.Reason = "Normal"
+	a.EvidenceIDs = sortedUnique(a.EvidenceIDs)
+	a.ObservedAt = latest
+	a.LatestObservedAt = latest
 	return a
 }
-func validWidthDimensions(d map[string]string) bool {
+func widthUnknown(a CoverageAssessment, reason string) CoverageAssessment {
+	a.State = CoverageUnknown
+	a.Reason = reason
+	a.EvidenceIDs = nil
+	a.ObservedAt = time.Time{}
+	a.LatestObservedAt = time.Time{}
+	a.ExpiresAt = time.Time{}
+	return a
+}
+func validateWidthPair(current, expected struct {
+	o      model.Observation
+	series evidence.Series
+}, b AssessmentBundle, now time.Time) (*big.Int, *big.Int, bool) {
+	for _, r := range []struct {
+		o      model.Observation
+		series evidence.Series
+	}{current, expected} {
+		if r.o.Validate() != nil || r.o.Quality != model.QualityGood || r.o.Unit != pcie.UnitLinkWidth || !r.o.ExpiresAt.After(r.o.ObservedAt) || r.o.ObservedAt.Before(b.Intent.ObservedAt) || !fresh(r.o.ObservedAt, r.o.ExpiresAt, b.Policy.Freshness, now) {
+			return nil, nil, false
+		}
+		ok, err := r.series.Fresh(now)
+		if err != nil || !ok {
+			return nil, nil, false
+		}
+	}
+	cv, ok := positiveWidth(current.o.Value)
+	if !ok {
+		return nil, nil, false
+	}
+	ev, ok := positiveWidth(expected.o.Value)
+	if !ok {
+		return nil, nil, false
+	}
+	return cv, ev, true
+}
+func validWidthDimensions(d map[string]string, subject model.AssetRef) bool {
+	if len(d) != 4 {
+		return false
+	}
 	for _, key := range []string{pcie.DimensionRootCanonical, pcie.DimensionPeerCanonical, pcie.DimensionPeerKind, pcie.DimensionExpectedProvenance} {
 		if d[key] == "" {
 			return false
 		}
 	}
-	return true
+	root := model.AssetRef{Kind: model.KindPCIeRootPort, Canonical: d[pcie.DimensionRootCanonical]}
+	if root.Validate() != nil {
+		return false
+	}
+	var kind model.AssetKind
+	switch d[pcie.DimensionPeerKind] {
+	case "PCIeRootPort":
+		kind = model.KindPCIeRootPort
+	case "PCIeSwitch":
+		kind = model.KindPCIeSwitch
+	case "PCIeFunction":
+		kind = model.KindPCIeFunction
+	default:
+		return false
+	}
+	peer := model.AssetRef{Kind: kind, Canonical: d[pcie.DimensionPeerCanonical]}
+	if peer.Validate() != nil || peer.Key() == subject.Key() {
+		return false
+	}
+	if kind == model.KindPCIeRootPort && peer.Canonical != root.Canonical {
+		return false
+	}
+	p := d[pcie.DimensionExpectedProvenance]
+	return p == pcie.ProvenanceAdjacentCapabilityMin || p == pcie.ProvenanceOperatorVerifiedWiring
 }
 func mapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
@@ -637,18 +775,27 @@ func mapsEqual(a, b map[string]string) bool {
 	}
 	return true
 }
-func number(v model.Value) (float64, bool) {
+func positiveWidth(v model.Value) (*big.Int, bool) {
 	if n, ok := v.Int(); ok {
-		return float64(n), true
+		if n <= 0 {
+			return nil, false
+		}
+		return big.NewInt(n), true
 	}
-	return v.Float()
+	f, ok := v.Float()
+	if !ok || f <= 0 || math.IsNaN(f) || math.IsInf(f, 0) || math.Trunc(f) != f {
+		return nil, false
+	}
+	n, accuracy := new(big.Float).SetFloat64(f).Int(nil)
+	return n, accuracy == big.Exact
 }
 
 func advanceReadyWindow(d DeviceDecision, previous *DeviceDecision, b AssessmentBundle, q qualificationEvidence) DeviceDecision {
 	cursors := make([]CoverageCursor, 0, len(d.Coverage))
 	newPoint := true
+	stable := previous != nil && sameContinuity(*previous, d)
 	previousByName := map[string]CoverageCursor{}
-	if previous != nil {
+	if stable {
 		for _, c := range previous.CoverageCursors {
 			previousByName[c.Name] = c
 		}
@@ -663,7 +810,7 @@ func advanceReadyWindow(d DeviceDecision, previous *DeviceDecision, b Assessment
 		}
 		cursors = append(cursors, c)
 	}
-	stable := previous != nil && sameContinuity(*previous, d) && len(previous.CoverageCursors) == len(cursors)
+	stable = stable && len(previous.CoverageCursors) == len(cursors)
 	if newPoint {
 		d.AcceptedNormalPoint = true
 		d.LastCompositeMin = q.minimum
@@ -684,6 +831,11 @@ func advanceReadyWindow(d DeviceDecision, previous *DeviceDecision, b Assessment
 		d.Phase = PhaseReady
 		d.Qualification = QualificationQualified
 		d.Reason = reasonReady
+	} else if !d.AcceptedNormalPoint && stable && previous.Phase == PhaseReady && previous.Qualification == QualificationQualified && previous.ValidUntil.After(d.EvaluatedAt) && d.ValidUntil.After(d.EvaluatedAt) {
+		d.Phase = PhaseReady
+		d.Qualification = QualificationQualified
+		d.ValidUntil = minTime(previous.ValidUntil, d.ValidUntil)
+		d.Reason = reasonReady
 	} else {
 		d.Phase = PhaseValidating
 		d.Qualification = QualificationUnknown
@@ -701,7 +853,7 @@ func requiredCoverage(p Policy, name string) bool {
 	return false
 }
 func sameContinuity(p DeviceDecision, d DeviceDecision) bool {
-	return p.BindingKey == d.BindingKey && p.NodeUID == d.NodeUID && p.BootID == d.BootID && p.Session == d.Session && p.TopologyDigest == d.TopologyDigest && p.BaselineDigest == d.BaselineDigest && p.PolicyRevision == d.PolicyRevision && p.RequestID == d.RequestID && p.MetadataGeneration == d.MetadataGeneration && p.Desired == d.Desired
+	return p.DeviceUID == d.DeviceUID && p.BindingKey == d.BindingKey && p.NodeUID == d.NodeUID && p.BootID == d.BootID && p.Session == d.Session && p.TopologyDigest == d.TopologyDigest && p.BaselineDigest == d.BaselineDigest && p.PolicyRevision == d.PolicyRevision && p.RequestID == d.RequestID && p.MetadataGeneration == d.MetadataGeneration && p.Desired == d.Desired
 }
 func continuous(p DeviceDecision, cursors []CoverageCursor, min time.Time, freshness time.Duration) bool {
 	if p.LastCompositeMin.IsZero() || min.Sub(p.LastCompositeMin) > freshness {
@@ -750,10 +902,12 @@ func evaluateAllocation(b AssessmentBundle, binding ObservedBinding, now time.Ti
 		return AllocationUnknown
 	}
 	for _, e := range a.Entries {
+		if e.ResourceName != "nvidia.com/gpu" || a.ObservedAt.Before(e.Workload.CreatedAt) || (!e.Workload.DeletedAt.IsZero() && a.ObservedAt.After(e.Workload.DeletedAt)) {
+			return AllocationUnknown
+		}
+	}
+	for _, e := range a.Entries {
 		if e.DeviceID == binding.Claim.UUID {
-			if e.ResourceName != "nvidia.com/gpu" || a.ObservedAt.Before(e.Workload.CreatedAt) || (!e.Workload.DeletedAt.IsZero() && a.ObservedAt.After(e.Workload.DeletedAt)) {
-				return AllocationUnknown
-			}
 			return AllocationInUse
 		}
 	}
@@ -766,10 +920,13 @@ func finishIntentPhase(d DeviceDecision, b AssessmentBundle, binding ObservedBin
 	if b.Intent.Desired == DesiredInService {
 		return d
 	}
-	completed := d.Allocation == AllocationEmpty && fenceAccepted(b, now)
+	fenceOK, fenceReason := fenceAssessment(b, now)
+	completed := d.Allocation == AllocationEmpty && fenceOK
 	pendingReason := reasonMaintenancePending
 	if d.Allocation != AllocationEmpty {
 		pendingReason = "AllocationUnknown"
+	} else if !fenceOK {
+		pendingReason = fenceReason
 	}
 	if b.Intent.Desired == DesiredMaintenance {
 		if completed {
@@ -790,12 +947,21 @@ func finishIntentPhase(d DeviceDecision, b AssessmentBundle, binding ObservedBin
 	}
 	return d
 }
-func fenceAccepted(b AssessmentBundle, now time.Time) bool {
+func fenceAssessment(b AssessmentBundle, now time.Time) (bool, string) {
 	f, p := b.Fence, b.FenceTrust
 	if f == nil || p == nil {
-		return false
+		return false, "FenceMissing"
 	}
-	return f.State == FenceAcknowledged && f.Node.ClusterID == b.Intent.Node.ClusterID && f.Node.UID == b.Intent.Node.UID && f.DeviceUID == b.Intent.Device.UID && f.BootID == b.Snapshot.BootID && f.Session == b.Snapshot.Session && f.RequestID == b.Intent.RequestID && f.MetadataGeneration == b.Intent.MetadataGeneration && f.ObservedAt.Equal(f.ObservedAt) && !f.ObservedAt.Before(b.Intent.ObservedAt) && fresh(f.ObservedAt, f.ExpiresAt, b.Policy.Freshness, now) && f.TrustProfileID == p.ID && p.ClusterID == b.Intent.Node.ClusterID && f.Source == p.Source
+	if f.TrustProfileID != p.ID || f.Source != p.Source || p.ClusterID != b.Intent.Node.ClusterID || f.Node.ClusterID != b.Intent.Node.ClusterID || f.Node.UID != b.Intent.Node.UID {
+		return false, reasonUntrustedSource
+	}
+	if f.DeviceUID != b.Intent.Device.UID || f.BootID != b.Snapshot.BootID || f.Session != b.Snapshot.Session || f.RequestID != b.Intent.RequestID || f.MetadataGeneration != b.Intent.MetadataGeneration || f.ObservedAt.Before(b.Intent.ObservedAt) || f.State != FenceAcknowledged {
+		return false, "FenceMissing"
+	}
+	if !fresh(f.ObservedAt, f.ExpiresAt, b.Policy.Freshness, now) {
+		return false, "EvidenceStale"
+	}
+	return true, reasonReady
 }
 
 func sortedUnique(in []string) []string {

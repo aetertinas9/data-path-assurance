@@ -35,6 +35,17 @@ func AggregateNode(input AggregateNodeInput, previous *NodeDecision, now time.Ti
 	}
 	d := NodeDecision{NodeUID: input.Node.UID, FleetUID: input.FleetUID, Selection: input.Selection, DeviceCount: len(devices), EvaluatedAt: now, Qualification: QualificationUnknown, Eligibility: EligibilityUnknown, Reason: "Validating"}
 	d.AssessmentRevision = assessmentDigest(input.FleetUID, devices)
+	if input.Selection != SelectionComplete {
+		switch input.Selection {
+		case SelectionConflict:
+			d.Reason = "Conflict"
+		case SelectionNoDevices:
+			d.Reason = "NoMatchingDevices"
+		default:
+			d.Reason = "Validating"
+		}
+		return d, nil
+	}
 	if len(devices) == 0 {
 		d.Reason = "NoMatchingDevices"
 		return d, nil
