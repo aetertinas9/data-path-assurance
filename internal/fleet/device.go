@@ -472,6 +472,11 @@ func assessPath(b AssessmentBundle, binding ObservedBinding, req CoverageRequire
 			return a
 		}
 		seen[current.Key()] = struct{}{}
+		if current.Kind == model.KindPCIeRootPort && rootAncestryContradicts(b, current, seen) {
+			a.Reason = "TopologyConflict"
+			a.EvidenceIDs = sortedUnique(append(provenanceIDs(proofs), observedEvidenceIDsFrom(b, current)...))
+			return a
+		}
 		if !root || current.Kind == model.KindPCIeRootPort {
 			break
 		}
@@ -484,6 +489,39 @@ func assessPath(b AssessmentBundle, binding ObservedBinding, req CoverageRequire
 		return a
 	}
 	return normalCoverage(a, proofs, b.Policy.Freshness)
+}
+func rootAncestryContradicts(b AssessmentBundle, root model.AssetRef, seen map[string]struct{}) bool {
+	edges, _ := b.Topology.EdgesFrom(root)
+	var parents []graph.Edge
+	for _, e := range edges {
+		if e.Relation == model.RelLocatedIn && e.Origin == model.OriginObserved {
+			parents = append(parents, e)
+		}
+	}
+	if len(parents) > 1 {
+		return true
+	}
+	if len(parents) == 0 {
+		return false
+	}
+	parent := parents[0].To
+	if _, ok := seen[parent.Key()]; ok {
+		return true
+	}
+	if parent.Kind != model.KindKubernetesNode {
+		return true
+	}
+	want := model.AssetRef{Kind: model.KindKubernetesNode, Canonical: model.NamespaceKubernetesNodeUID + ":" + b.Intent.Node.UID}
+	return parent.Key() != want.Key()
+}
+func observedEvidenceIDsFrom(b AssessmentBundle, from model.AssetRef) []string {
+	var ids []string
+	for _, p := range b.Provenance {
+		if p.Kind == EdgeEvidenceObserved && p.Edge.From.Key() == from.Key() && p.Edge.Relation == model.RelLocatedIn && p.Edge.Origin == model.OriginObserved {
+			ids = append(ids, p.EvidenceID)
+		}
+	}
+	return sortedUnique(ids)
 }
 func provenanceIDs(proofs []EdgeProvenance) []string {
 	ids := make([]string, 0, len(proofs))
@@ -648,6 +686,12 @@ func assessWidth(b AssessmentBundle, binding ObservedBinding, req CoverageRequir
 			}
 			continue
 		}
+		if !widthEndpointsPresent(b.Topology, current.o.Dimensions) {
+			if atGlobalLatest {
+				return widthUnknown(a, reasonCoverageUnknown)
+			}
+			continue
+		}
 		if current.o.Dimensions[pcie.DimensionExpectedProvenance] == pcie.ProvenanceOperatorVerifiedWiring && !trusted(b.CollectorTrust, TrustOperatorBaseline, source) {
 			if atGlobalLatest {
 				return widthUnknown(a, reasonUntrustedSource)
@@ -766,6 +810,35 @@ func validWidthDimensions(d map[string]string, subject model.AssetRef) bool {
 	}
 	p := d[pcie.DimensionExpectedProvenance]
 	return p == pcie.ProvenanceAdjacentCapabilityMin || p == pcie.ProvenanceOperatorVerifiedWiring
+}
+func widthEndpointsPresent(topology *graph.Snapshot, d map[string]string) bool {
+	if topology == nil {
+		return false
+	}
+	root := model.AssetRef{Kind: model.KindPCIeRootPort, Canonical: d[pcie.DimensionRootCanonical]}
+	peerKind, ok := widthPeerKind(d[pcie.DimensionPeerKind])
+	if !ok {
+		return false
+	}
+	peer := model.AssetRef{Kind: peerKind, Canonical: d[pcie.DimensionPeerCanonical]}
+	storedRoot, err := topology.Asset(root)
+	if err != nil || storedRoot.Key() != root.Key() {
+		return false
+	}
+	storedPeer, err := topology.Asset(peer)
+	return err == nil && storedPeer.Key() == peer.Key()
+}
+func widthPeerKind(value string) (model.AssetKind, bool) {
+	switch value {
+	case "PCIeRootPort":
+		return model.KindPCIeRootPort, true
+	case "PCIeSwitch":
+		return model.KindPCIeSwitch, true
+	case "PCIeFunction":
+		return model.KindPCIeFunction, true
+	default:
+		return 0, false
+	}
 }
 func mapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
