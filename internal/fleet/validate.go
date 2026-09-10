@@ -171,9 +171,6 @@ func (a CoverageAssessment) Validate() error {
 	if err := uniqueStrings(a.EvidenceIDs, "CoverageAssessment.EvidenceIDs", true); err != nil {
 		return err
 	}
-	if err := required(a.Reason, "CoverageAssessment.Reason"); err != nil {
-		return err
-	}
 	if a.State == CoverageNormal {
 		if len(a.EvidenceIDs) == 0 {
 			return invalidf("normal CoverageAssessment has no EvidenceIDs")
@@ -457,7 +454,7 @@ func (d DeviceDecision) Validate() error {
 	} else if !zero(d.Binding) {
 		return invalidf("DeviceDecision.Binding must be zero unless Bound")
 	}
-	for value, name := range map[string]string{d.Reason: "DeviceDecision.Reason", d.PolicyRevision: "DeviceDecision.PolicyRevision", d.RequestID: "DeviceDecision.RequestID", d.DeviceUID: "DeviceDecision.DeviceUID", d.NodeUID: "DeviceDecision.NodeUID", d.BootID: "DeviceDecision.BootID", d.GraphRevision: "DeviceDecision.GraphRevision", d.TopologyDigest: "DeviceDecision.TopologyDigest", d.BaselineDigest: "DeviceDecision.BaselineDigest"} {
+	for value, name := range map[string]string{d.PolicyRevision: "DeviceDecision.PolicyRevision", d.RequestID: "DeviceDecision.RequestID", d.DeviceUID: "DeviceDecision.DeviceUID", d.NodeUID: "DeviceDecision.NodeUID", d.BootID: "DeviceDecision.BootID", d.GraphRevision: "DeviceDecision.GraphRevision", d.TopologyDigest: "DeviceDecision.TopologyDigest", d.BaselineDigest: "DeviceDecision.BaselineDigest"} {
 		if err := required(value, name); err != nil {
 			return err
 		}
@@ -546,7 +543,7 @@ func (a AggregateNodeInput) Validate() error {
 	return nil
 }
 func (n NodeDecision) Validate() error {
-	if n.NodeUID == "" || n.FleetUID == "" || n.Reason == "" || !digestPattern.MatchString(n.AssessmentRevision) {
+	if n.NodeUID == "" || n.FleetUID == "" || !digestPattern.MatchString(n.AssessmentRevision) {
 		return invalidf("NodeDecision identity/reason/revision is invalid")
 	}
 	if !n.Qualification.IsValid() || !n.Eligibility.IsValid() || !n.Selection.IsValid() || n.DeviceCount < 0 {
@@ -629,8 +626,8 @@ func (g GateInput) Validate() error {
 	return nil
 }
 func (g GateDecision) Validate() error {
-	if !g.Action.IsValid() || g.Reason == "" {
-		return invalidf("GateDecision action/reason is invalid")
+	if !g.Action.IsValid() {
+		return invalidf("GateDecision action is invalid")
 	}
 	if err := requiredTime(g.EvaluatedAt, "GateDecision.EvaluatedAt"); err != nil {
 		return err

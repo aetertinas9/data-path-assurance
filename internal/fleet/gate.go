@@ -27,8 +27,9 @@ func EvaluateGate(input GateInput, previous *GateDecision, now time.Time) (GateD
 	if input.NodeDecision.NodeUID != input.Node.UID {
 		return GateDecision{}, invalidf("EvaluateGate node decision UID does not match node")
 	}
-	if previous != nil && !zero(previous.Ownership) {
-		if zero(input.Ownership) || !sameOwnedTarget(previous.Ownership, input.Ownership) {
+	if previous != nil {
+		previousOwned, inputOwned := !zero(previous.Ownership), !zero(input.Ownership)
+		if previousOwned != inputOwned || (previousOwned && !sameOwnedTarget(previous.Ownership, input.Ownership)) {
 			return GateDecision{}, invalidf("EvaluateGate previous ownership does not match input ownership")
 		}
 	}
@@ -39,12 +40,18 @@ func EvaluateGate(input GateInput, previous *GateDecision, now time.Time) (GateD
 		if input.Ownership.CleanupRequestedAt.IsZero() {
 			return GateDecision{}, invalidf("cleanup ownership lacks CleanupRequestedAt")
 		}
+		if input.Ownership.NodeUID != input.Node.UID {
+			return GateDecision{}, invalidf("cleanup ownership node does not match target node")
+		}
 		return evaluateCleanup(input, previous, now), nil
 	}
 	return evaluateEnforce(input, previous, now)
 }
 
 func evaluateEnforce(input GateInput, previous *GateDecision, now time.Time) (GateDecision, error) {
+	if input.NodeDecision.FleetUID != input.FleetUID {
+		return GateDecision{}, invalidf("enforce node decision fleet does not match current fleet")
+	}
 	owned := !zero(input.Ownership)
 	if owned {
 		if err := input.Ownership.Validate(); err != nil {
@@ -58,7 +65,9 @@ func evaluateEnforce(input GateInput, previous *GateDecision, now time.Time) (Ga
 	noDevices := input.NodeDecision.Selection == SelectionNoDevices
 	if conflict || noDevices {
 		if owned {
-			return GateDecision{Action: GateActionMaintain, Ownership: cloneOwnership(input.Ownership), Reason: selectionReason(conflict), EvaluatedAt: now}, nil
+			o := cloneOwnership(input.Ownership)
+			clearRecovery(&o)
+			return GateDecision{Action: GateActionMaintain, Ownership: o, Reason: selectionReason(conflict), EvaluatedAt: now}, nil
 		}
 		return GateDecision{Action: GateActionNone, Reason: selectionReason(conflict), EvaluatedAt: now}, nil
 	}
@@ -106,7 +115,18 @@ func evaluateCleanup(input GateInput, previous *GateDecision, now time.Time) Gat
 	return GateDecision{Action: GateActionMaintain, Ownership: o, Reason: "CleanupPending", EvaluatedAt: now}
 }
 func advanceRecovery(o GateOwnership, n NodeDecision, controller string, previous *GateDecision, now time.Time, freshness time.Duration) (GateOwnership, bool) {
-	if n.NormalPointDigest == "" || n.NormalPointAt.IsZero() || n.EvaluatedAt.After(now) || !now.Before(n.ValidUntil) || now.Sub(n.NormalPointAt) > freshness {
+	if n.NormalPointDigest == "" || n.NormalPointAt.IsZero() || n.NormalPointAt.After(now) || n.EvaluatedAt.After(now) || !now.Before(n.ValidUntil) || now.Sub(n.NormalPointAt) > freshness {
+		clearRecovery(&o)
+		return o, false
+	}
+	if previous != nil && previous.Ownership.RecoveryControllerID == controller && previous.Ownership.LastRecoveryDigest == n.NormalPointDigest && previous.Ownership.LastRecoveryPointAt.Equal(n.NormalPointAt) {
+		o.RecoveryStartedAt = previous.Ownership.RecoveryStartedAt
+		o.LastRecoveryPointAt = previous.Ownership.LastRecoveryPointAt
+		o.LastRecoveryDigest = previous.Ownership.LastRecoveryDigest
+		o.RecoveryControllerID = previous.Ownership.RecoveryControllerID
+		return o, false
+	}
+	if previous != nil && previous.Ownership.RecoveryControllerID == controller && previous.Ownership.LastRecoveryDigest != "" && (!n.NormalPointAt.After(previous.Ownership.LastRecoveryPointAt) || previous.Ownership.LastRecoveryDigest == n.NormalPointDigest) {
 		clearRecovery(&o)
 		return o, false
 	}
