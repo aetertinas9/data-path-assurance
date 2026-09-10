@@ -457,7 +457,7 @@ func (d DeviceDecision) Validate() error {
 	} else if !zero(d.Binding) {
 		return invalidf("DeviceDecision.Binding must be zero unless Bound")
 	}
-	for value, name := range map[string]string{d.Reason: "DeviceDecision.Reason", d.PolicyRevision: "DeviceDecision.PolicyRevision", d.RequestID: "DeviceDecision.RequestID", d.DeviceUID: "DeviceDecision.DeviceUID", d.NodeUID: "DeviceDecision.NodeUID", d.BootID: "DeviceDecision.BootID", d.TopologyDigest: "DeviceDecision.TopologyDigest", d.BaselineDigest: "DeviceDecision.BaselineDigest"} {
+	for value, name := range map[string]string{d.Reason: "DeviceDecision.Reason", d.PolicyRevision: "DeviceDecision.PolicyRevision", d.RequestID: "DeviceDecision.RequestID", d.DeviceUID: "DeviceDecision.DeviceUID", d.NodeUID: "DeviceDecision.NodeUID", d.BootID: "DeviceDecision.BootID", d.GraphRevision: "DeviceDecision.GraphRevision", d.TopologyDigest: "DeviceDecision.TopologyDigest", d.BaselineDigest: "DeviceDecision.BaselineDigest"} {
 		if err := required(value, name); err != nil {
 			return err
 		}
@@ -467,6 +467,9 @@ func (d DeviceDecision) Validate() error {
 	}
 	if d.BindingState == BindingBound && d.BindingKey == "" {
 		return invalidf("bound DeviceDecision.BindingKey is empty")
+	}
+	if d.BindingState != BindingBound && d.BindingKey != "" {
+		return invalidf("unbound DeviceDecision.BindingKey is nonempty")
 	}
 	if d.MetadataGeneration < 1 || d.Session < 1 {
 		return invalidf("DeviceDecision generation/session is not positive")
