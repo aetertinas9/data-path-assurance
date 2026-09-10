@@ -1,6 +1,7 @@
 package tests_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -133,6 +134,39 @@ func TestGFL_020A_028_UnrelatedContradictionPreservesValidDevice(t *testing.T) {
 	decision, err := fleet.EvaluateDevice(bundle, nil, at)
 	if err != nil || !decision.AcceptedNormalPoint {
 		t.Fatalf("unrelated contradiction suppressed valid device: %#v/%v", decision, err)
+	}
+}
+
+// GFL-021/GFL-041A: a derived shared-failure-domain edge alone is not a
+// supported live GPU/NIC shared-ancestor proof and cannot become Normal.
+func TestGFL_021_041A_DerivedSharedAncestorAloneIsNotNormal(t *testing.T) {
+	at := fleetT0.Add(50 * time.Minute)
+	function, root, node := fleetTopologyAssets(t)
+	nic := fleetAsset(t, model.KindPCIeFunction, string(model.NamespacePCIBDF), "0000:af:00.0")
+	physical := fleetObservedEdge(t, function, root, model.RelLocatedIn)
+	rootNode := fleetObservedEdge(t, root, node, model.RelLocatedIn)
+	derived, err := graph.NewEdge(function, nic, model.RelSharesFailureDomainWith, model.OriginDerived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := fleetReplaceTopology(t, fleetBundle(t, at, 0, fleet.DesiredInService), []model.AssetRef{function, root, node, nic}, []graph.Edge{physical, rootNode, derived})
+	bundle.Provenance[2].Kind = fleet.EdgeEvidenceInferred
+	bundle.Policy.RequiredCoverage = []fleet.CoverageRequirement{{Name: "shared", PathKind: "gpu-nic-shared-ancestor", Required: true}}
+	fleetAssertNoNormalPoint(t, bundle, at)
+}
+
+// GFL-031: nic-lldp-remote remains Unknown in pure live evaluation because the
+// live LLDP adapter is outside S1-S4; supplied topology cannot imply collection.
+func TestGFL_031_LiveLLDPRemoteCoverageRemainsUnknown(t *testing.T) {
+	at := fleetT0.Add(50 * time.Minute)
+	bundle := fleetBundle(t, at, 0, fleet.DesiredInService)
+	bundle.Policy.RequiredCoverage = []fleet.CoverageRequirement{{Name: "lldp", PathKind: "nic-lldp-remote", Required: true}}
+	decision, err := fleet.EvaluateDevice(bundle, nil, at)
+	if err != nil {
+		t.Fatalf("EvaluateDevice: %v", err)
+	}
+	if len(decision.Coverage) != 1 || decision.Coverage[0].State != fleet.CoverageUnknown || decision.AcceptedNormalPoint || decision.Phase == fleet.PhaseReady {
+		t.Fatalf("live LLDP requirement was promoted: %#v", decision)
 	}
 }
 
@@ -401,5 +435,45 @@ func TestGFL_019_043_UntrustedFenceIsNotSuccessful(t *testing.T) {
 	decision, err := fleet.EvaluateDevice(bundle, nil, at)
 	if err != nil || decision.Phase == fleet.PhaseMaintenanceReady || decision.Reason != "UntrustedSource" {
 		t.Fatalf("untrusted fence reported success: %#v/%v", decision, err)
+	}
+}
+
+// GFL-013/GFL-078: nonzero continuity timestamps outside protobuf years 1..9999
+// are invalid, while evaluator-produced zero omission forms remain valid.
+func TestGFL_013_078_ContinuityTimestampRangeValidation(t *testing.T) {
+	at := fleetT0.Add(50 * time.Minute)
+	outOfRange := time.Date(0, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	device := fleetReadyDevice(t, at, "device-a")
+	if err := device.Validate(); err != nil {
+		t.Fatalf("valid device control: %v", err)
+	}
+	badDevice := device
+	badDevice.ReadyWindowStartedAt = outOfRange
+	if err := badDevice.Validate(); !errors.Is(err, fleet.ErrInvalidInput) {
+		t.Fatalf("out-of-range device continuity error = %v, want ErrInvalidInput", err)
+	}
+
+	input := fleet.AggregateNodeInput{Node: device.Binding.Node, FleetUID: "fleet-uid", Selection: fleet.SelectionComplete, Devices: []fleet.DeviceAggregate{{DeviceUID: device.DeviceUID, NodeUID: device.NodeUID, Desired: device.Desired, MetadataGeneration: device.MetadataGeneration, Decision: device}}}
+	node, err := fleet.AggregateNode(input, nil, at)
+	if err != nil || node.NormalPointAt.IsZero() {
+		t.Fatalf("valid node control = %#v/%v", node, err)
+	}
+	badNode := node
+	badNode.NormalPointAt = outOfRange
+	if err := badNode.Validate(); !errors.Is(err, fleet.ErrInvalidInput) {
+		t.Fatalf("out-of-range node continuity error = %v, want ErrInvalidInput", err)
+	}
+
+	unknownBundle := fleetBundle(t, at, 0, fleet.DesiredInService)
+	unknownBundle.CollectorTrust.Sources = unknownBundle.CollectorTrust.Sources[1:]
+	unknownDevice, err := fleet.EvaluateDevice(unknownBundle, nil, at)
+	if err != nil || !unknownDevice.ReadyWindowStartedAt.IsZero() || unknownDevice.Validate() != nil {
+		t.Fatalf("zero device omission form invalid: %#v/%v", unknownDevice, err)
+	}
+	partialInput := fleet.AggregateNodeInput{Node: device.Binding.Node, FleetUID: "fleet-uid", Selection: fleet.SelectionPartial, Devices: input.Devices}
+	unknownNode, err := fleet.AggregateNode(partialInput, nil, at)
+	if err != nil || !unknownNode.NormalPointAt.IsZero() || unknownNode.Validate() != nil {
+		t.Fatalf("zero node omission form invalid: %#v/%v", unknownNode, err)
 	}
 }

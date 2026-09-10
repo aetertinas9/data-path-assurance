@@ -162,3 +162,37 @@ func TestGFL_013_015_025_136_AdmitSnapshotValidation(t *testing.T) {
 		t.Fatalf("partial previous returned %#v/%v, want zero/ErrInvalidInput", got, err)
 	}
 }
+
+// GFL-025/GFL-027: admittedSession must be positive. A strictly newer admitted
+// session accepts only its complete sequence-zero baseline; same/older reuse,
+// partial baseline, and nonzero first frames preserve the prior cursor.
+func TestGFL_025_027_AdmitSnapshotSessionTransitionBoundaries(t *testing.T) {
+	validBaseline := fleetEnvelope(1, 0, fleet.CompletenessComplete, "baseline", fleetT0)
+	for _, admitted := range []int64{0, -1} {
+		got, _, err := fleet.AdmitSnapshot(admitted, nil, validBaseline)
+		if !errors.Is(err, fleet.ErrInvalidInput) || !reflect.DeepEqual(got, fleet.SnapshotCursor{}) {
+			t.Errorf("admittedSession %d returned %#v/%v, want zero/ErrInvalidInput", admitted, got, err)
+		}
+	}
+
+	previous, _, err := fleet.AdmitSnapshot(7, nil, fleetEnvelope(7, 0, fleet.CompletenessComplete, "session-7", fleetT0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newBaseline := fleetEnvelope(8, 0, fleet.CompletenessComplete, "session-8", fleetT0.Add(time.Second))
+	accepted, order, err := fleet.AdmitSnapshot(8, &previous, newBaseline)
+	if err != nil || order != fleet.SnapshotAccepted || accepted.Session != 8 || !accepted.Baseline {
+		t.Fatalf("new baseline = %#v/%s/%v", accepted, order.String(), err)
+	}
+	for _, candidate := range []fleet.SnapshotEnvelope{
+		fleetEnvelope(7, 0, fleet.CompletenessComplete, "same-session", fleetT0.Add(time.Second)),
+		fleetEnvelope(6, 0, fleet.CompletenessComplete, "older-session", fleetT0.Add(time.Second)),
+		fleetEnvelope(8, 0, fleet.CompletenessPartial, "partial-new", fleetT0.Add(time.Second)),
+		fleetEnvelope(8, 1, fleet.CompletenessComplete, "nonzero-new", fleetT0.Add(time.Second)),
+	} {
+		got, gotOrder, gotErr := fleet.AdmitSnapshot(8, &previous, candidate)
+		if gotErr != nil || gotOrder != fleet.SnapshotWrongSession || !reflect.DeepEqual(got, previous) {
+			t.Errorf("rejected transition returned %#v/%s/%v, want unchanged/WrongSession/nil", got, gotOrder.String(), gotErr)
+		}
+	}
+}

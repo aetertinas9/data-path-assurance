@@ -61,6 +61,43 @@ func TestGFL_000_PublicEnums(t *testing.T) {
 	}
 }
 
+// GFL-000: zero (except CompletenessUnknown), the first value beyond each
+// declared range, and signed extremes are invalid. String remains panic-free;
+// its text for invalid values is intentionally not asserted.
+func TestGFL_000_InvalidEnumBoundaries(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	minInt := -maxInt - 1
+	invalid := []fleetEnum{
+		fleet.DesiredState(0), fleet.DesiredState(int(fleet.DesiredRetired) + 1), fleet.DesiredState(minInt), fleet.DesiredState(maxInt),
+		fleet.LifecyclePhase(0), fleet.LifecyclePhase(int(fleet.PhaseUnknown) + 1), fleet.LifecyclePhase(minInt), fleet.LifecyclePhase(maxInt),
+		fleet.Qualification(0), fleet.Qualification(int(fleet.QualificationUnknown) + 1), fleet.Qualification(minInt), fleet.Qualification(maxInt),
+		fleet.Eligibility(0), fleet.Eligibility(int(fleet.EligibilityUnknown) + 1), fleet.Eligibility(minInt), fleet.Eligibility(maxInt),
+		fleet.BindingState(0), fleet.BindingState(int(fleet.BindingConflict) + 1), fleet.BindingState(minInt), fleet.BindingState(maxInt),
+		fleet.SelectionState(0), fleet.SelectionState(int(fleet.SelectionNoDevices) + 1), fleet.SelectionState(minInt), fleet.SelectionState(maxInt),
+		fleet.CoverageState(0), fleet.CoverageState(int(fleet.CoverageUnsupported) + 1), fleet.CoverageState(minInt), fleet.CoverageState(maxInt),
+		fleet.SnapshotCompleteness(int(fleet.CompletenessPartial) + 1), fleet.SnapshotCompleteness(minInt), fleet.SnapshotCompleteness(maxInt),
+		fleet.EdgeEvidenceKind(0), fleet.EdgeEvidenceKind(int(fleet.EdgeEvidenceInferred) + 1), fleet.EdgeEvidenceKind(minInt), fleet.EdgeEvidenceKind(maxInt),
+		fleet.AllocationState(0), fleet.AllocationState(int(fleet.AllocationUnknown) + 1), fleet.AllocationState(minInt), fleet.AllocationState(maxInt),
+		fleet.FenceState(0), fleet.FenceState(int(fleet.FenceUnknown) + 1), fleet.FenceState(minInt), fleet.FenceState(maxInt),
+		fleet.SnapshotOrder(0), fleet.SnapshotOrder(int(fleet.SnapshotConflict) + 1), fleet.SnapshotOrder(minInt), fleet.SnapshotOrder(maxInt),
+		fleet.TrustMode(0), fleet.TrustMode(int(fleet.TrustModeOffline) + 1), fleet.TrustMode(minInt), fleet.TrustMode(maxInt),
+		fleet.TrustCapability(0), fleet.TrustCapability(int(fleet.TrustExternalFence) + 1), fleet.TrustCapability(minInt), fleet.TrustCapability(maxInt),
+		fleet.AllocationProfile(0), fleet.AllocationProfile(int(fleet.AllocationUnsupported) + 1), fleet.AllocationProfile(minInt), fleet.AllocationProfile(maxInt),
+		fleet.GateMode(0), fleet.GateMode(int(fleet.GateModeCleanup) + 1), fleet.GateMode(minInt), fleet.GateMode(maxInt),
+		fleet.GateAction(0), fleet.GateAction(int(fleet.GateActionRemove) + 1), fleet.GateAction(minInt), fleet.GateAction(maxInt),
+		fleet.CleanupPhase(0), fleet.CleanupPhase(int(fleet.CleanupOwnershipConflict) + 1), fleet.CleanupPhase(minInt), fleet.CleanupPhase(maxInt),
+	}
+	for _, value := range invalid {
+		if value.IsValid() {
+			t.Errorf("boundary %T(%v) is valid", value, value)
+		}
+		_ = value.String()
+	}
+	if !fleet.CompletenessUnknown.IsValid() {
+		t.Fatal("CompletenessUnknown is the declared valid zero-value exception")
+	}
+}
+
 // GFL-000: every public DTO can be independently validated even when it was
 // assembled without a constructor.
 func TestGFL_000_AllPublicStructsExposeValidate(t *testing.T) {
