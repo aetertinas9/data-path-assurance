@@ -356,6 +356,9 @@ func findingsLinked(b AssessmentBundle, function model.AssetRef) bool {
 		if f.State != model.StateActive || !scopeContains(f.Scope, function) {
 			continue
 		}
+		if len(f.Evidence) == 0 {
+			return false
+		}
 		for _, e := range f.Evidence {
 			if _, ok := ids[e.ObservationID]; !ok {
 				return false
