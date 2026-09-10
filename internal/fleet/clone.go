@@ -67,16 +67,15 @@ func cloneDecision(d DeviceDecision) DeviceDecision {
 	return d
 }
 func cloneFinding(f model.Finding) model.Finding {
-	f.Scope = make([]model.AssetRef, len(f.Scope))
-	for i, a := range f.Scope {
-		f.Scope[i] = cloneAsset(a)
+	f.Scope = slices.Clone(f.Scope)
+	for i := range f.Scope {
+		f.Scope[i] = cloneAsset(f.Scope[i])
 	}
 	f.Evidence = slices.Clone(f.Evidence)
 	f.MissingInputs = slices.Clone(f.MissingInputs)
-	f.Affected = make([]model.ImpactRef, len(f.Affected))
-	for i, a := range f.Affected {
-		f.Affected[i] = a
-		f.Affected[i].Asset = cloneAsset(a.Asset)
+	f.Affected = slices.Clone(f.Affected)
+	for i := range f.Affected {
+		f.Affected[i].Asset = cloneAsset(f.Affected[i].Asset)
 	}
 	return f
 }
