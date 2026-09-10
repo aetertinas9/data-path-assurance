@@ -355,6 +355,38 @@ func TestGFL_040_051_121_ActivePathFindingDegradesDevice(t *testing.T) {
 	})
 }
 
+// GFL-040/GFL-051 with MDL-060/061: a finding supported only by a declared
+// missing input is a valid Finding, but it has no current graph-linked evidence
+// and therefore makes fleet qualification Unknown rather than Degraded.
+func TestGFL_040_051_MissingInputsOnlyFindingIsUnknown(t *testing.T) {
+	at := fleetT0.Add(10 * time.Minute)
+	bundle := fleetBundle(t, at, 0, fleet.DesiredInService)
+	control, err := fleet.EvaluateDevice(bundle, nil, at)
+	if err != nil || !control.AcceptedNormalPoint {
+		t.Fatalf("complete InService positive control = %#v/%v", control, err)
+	}
+	finding, err := model.NewFinding(model.Finding{
+		ID: "finding-missing-width", Type: model.FindingPCIeLinkWidthDegraded, Scope: []model.AssetRef{fleetFunction(t)},
+		Severity: model.SeverityWarning, Confidence: model.ConfidenceLow, State: model.StateActive,
+		MissingInputs: []model.SignalRef{model.SignalRef("pcie.link.width.current")},
+		FirstSeen:     at.Add(-time.Second), LastSeen: at, Explanation: "PCIe width input is missing",
+	})
+	if err != nil {
+		t.Fatalf("missing-input-only finding constructor: %v", err)
+	}
+	if err := finding.Validate(); err != nil {
+		t.Fatalf("missing-input-only finding Validate: %v", err)
+	}
+	bundle.Findings = []model.Finding{finding}
+	decision, err := fleet.EvaluateDevice(bundle, nil, at)
+	if err != nil {
+		t.Fatalf("EvaluateDevice: %v", err)
+	}
+	if decision.Phase != fleet.PhasePending || decision.Qualification != fleet.QualificationUnknown || decision.AcceptedNormalPoint || decision.Phase == fleet.PhaseDegraded || decision.Qualification == fleet.QualificationDisqualified {
+		t.Fatalf("missing-input-only finding was treated as active bad evidence: %#v", decision)
+	}
+}
+
 func fleetBundleWithObservation(t *testing.T, bundle fleet.AssessmentBundle, observation model.Observation) fleet.AssessmentBundle {
 	t.Helper()
 	partition := bundle.Topology.Partition()
