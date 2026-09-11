@@ -445,12 +445,14 @@ func TestGFL_017_020A_031_PCIeWidthRequiresActualPathCorrespondence(t *testing.T
 	now := fleetT0.Add(50 * time.Minute)
 	function, root, node := fleetTopologyAssets(t)
 	unrelatedRoot := fleetAsset(t, model.KindPCIeRootPort, string(model.NamespacePCIBDF), "0000:62:00.0")
+	unrelatedSwitch := fleetAsset(t, model.KindPCIeSwitch, string(model.NamespacePCIBDF), "0000:61:00.0")
 	edges := []graph.Edge{
 		fleetObservedEdge(t, function, root, model.RelLocatedIn),
 		fleetObservedEdge(t, root, node, model.RelLocatedIn),
+		fleetObservedEdge(t, unrelatedSwitch, unrelatedRoot, model.RelLocatedIn),
 		fleetObservedEdge(t, unrelatedRoot, node, model.RelLocatedIn),
 	}
-	base := fleetReplaceTopology(t, fleetBundle(t, now, 0, fleet.DesiredInService), []model.AssetRef{function, root, unrelatedRoot, node}, edges)
+	base := fleetReplaceTopology(t, fleetBundle(t, now, 0, fleet.DesiredInService), []model.AssetRef{function, root, unrelatedSwitch, unrelatedRoot, node}, edges)
 	source := base.Provenance[0].Source
 
 	valid := fleetConfigureWidthBundle(t, base, fleetWidthPair(t, "actual-path", function, root, root, source, model.KindPCIeRootPort.String(), now, now.Add(time.Minute))...)
@@ -464,7 +466,7 @@ func TestGFL_017_020A_031_PCIeWidthRequiresActualPathCorrespondence(t *testing.T
 		fleetAssertWidthUnknown(t, fleetConfigureWidthBundle(t, base, observations...), now)
 	})
 	t.Run("correct root but unrelated present peer", func(t *testing.T) {
-		observations := fleetWidthPair(t, "unrelated-peer", function, root, unrelatedRoot, source, model.KindPCIeRootPort.String(), now, now.Add(time.Minute))
+		observations := fleetWidthPair(t, "unrelated-peer", function, root, unrelatedSwitch, source, model.KindPCIeSwitch.String(), now, now.Add(time.Minute))
 		fleetAssertWidthUnknown(t, fleetConfigureWidthBundle(t, base, observations...), now)
 	})
 }
