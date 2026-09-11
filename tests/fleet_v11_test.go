@@ -411,7 +411,7 @@ func fleetWidthPair(t *testing.T, id string, function, root, peer model.AssetRef
 	}
 }
 
-func fleetAssertWidthUnknown(t *testing.T, bundle fleet.AssessmentBundle, now time.Time) {
+func fleetAssertWidthUnknown(t *testing.T, bundle fleet.AssessmentBundle, now time.Time) fleet.DeviceDecision {
 	t.Helper()
 	decision, err := fleet.EvaluateDevice(bundle, nil, now)
 	if err != nil {
@@ -420,6 +420,7 @@ func fleetAssertWidthUnknown(t *testing.T, bundle fleet.AssessmentBundle, now ti
 	if decision.Phase != fleet.PhasePending || decision.Qualification != fleet.QualificationUnknown || decision.AcceptedNormalPoint || !decision.ValidUntil.IsZero() || len(decision.Coverage) != 1 || decision.Coverage[0].State != fleet.CoverageUnknown {
 		t.Fatalf("unmatched width proof = %#v", decision)
 	}
+	return decision
 }
 
 // GFL-009/GFL-031: the ratified PCIe current/expected schema produces Normal
@@ -496,10 +497,10 @@ func TestGFL_017_020A_031_PCIeWidthUsesImmediateSwitchPeer(t *testing.T) {
 	fleetAssertWidthUnknown(t, fleetConfigureWidthBundle(t, base, farther...), now)
 }
 
-// GFL-013/GFL-017/GFL-020A/GFL-041/GFL-042: width correspondence depends on
-// fresh trusted path provenance, and the shortest provenance lifetime bounds a
-// qualified decision even when the width pair itself lives longer.
-func TestGFL_013_017_020A_041_042_PCIeWidthPathProvenanceControlsQualification(t *testing.T) {
+// GFL-013/GFL-017/GFL-020A/GFL-041/GFL-042/GFL-122: width correspondence
+// depends on fresh trusted path provenance, and the shortest provenance
+// lifetime bounds a qualified decision even when the width pair lives longer.
+func TestGFL_013_017_020A_041_042_122_PCIeWidthPathProvenanceControlsQualification(t *testing.T) {
 	now := fleetT0.Add(50 * time.Minute)
 	function, root, _ := fleetTopologyAssets(t)
 	source := model.SourceRef{Type: string(model.SourceTypeAgent), Name: "collector"}
@@ -518,7 +519,23 @@ func TestGFL_013_017_020A_041_042_PCIeWidthPathProvenanceControlsQualification(t
 
 	untrusted := fleetWidthBundle(t, now, observations...)
 	untrusted.Provenance[0].Source = model.SourceRef{Type: string(model.SourceTypeAgent), Name: "untrusted-path"}
-	fleetAssertWidthUnknown(t, untrusted, now)
+	untrustedDecision := fleetAssertWidthUnknown(t, untrusted, now)
+	if untrustedDecision.Coverage[0].Reason != "UntrustedSource" {
+		t.Fatalf("untrusted path coverage reason = %q, want UntrustedSource", untrustedDecision.Coverage[0].Reason)
+	}
+
+	futureAt := now.Add(30 * time.Second)
+	futurePair := fleetWidthPair(t, "future-path", function, root, root, source, model.KindPCIeRootPort.String(), futureAt, futureAt.Add(time.Minute))
+	future := fleetConfigureWidthBundle(t, fleetBundle(t, futureAt, 1, fleet.DesiredInService), futurePair...)
+	future.Provenance[0].ObservedAt = futureAt.Add(time.Second)
+	future.Provenance[0].ExpiresAt = futureAt.Add(time.Minute)
+	futureDecision, err := fleet.EvaluateDevice(future, &control, futureAt)
+	if err != nil {
+		t.Fatalf("future path EvaluateDevice: %v", err)
+	}
+	if futureDecision.Phase != fleet.PhasePending || futureDecision.Qualification != fleet.QualificationUnknown || futureDecision.Reason != "FutureObservation" || futureDecision.AcceptedNormalPoint || !futureDecision.ReadyWindowStartedAt.IsZero() || len(futureDecision.CoverageCursors) != 0 || len(futureDecision.Coverage) != 1 || futureDecision.Coverage[0].State != fleet.CoverageUnknown || futureDecision.Coverage[0].Reason != "FutureObservation" {
+		t.Fatalf("future path decision = %#v", futureDecision)
+	}
 
 	firstAt := now
 	secondAt := firstAt.Add(30 * time.Second)
