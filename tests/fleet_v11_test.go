@@ -391,11 +391,35 @@ func fleetBundleWithObservations(t *testing.T, bundle fleet.AssessmentBundle, ob
 
 func fleetWidthBundle(t *testing.T, now time.Time, observations ...model.Observation) fleet.AssessmentBundle {
 	t.Helper()
-	bundle := fleetBundle(t, now, 0, fleet.DesiredInService)
+	return fleetConfigureWidthBundle(t, fleetBundle(t, now, 0, fleet.DesiredInService), observations...)
+}
+
+func fleetConfigureWidthBundle(t *testing.T, bundle fleet.AssessmentBundle, observations ...model.Observation) fleet.AssessmentBundle {
+	t.Helper()
 	bundle.Policy.RequiredCoverage = []fleet.CoverageRequirement{{Name: "width", PathKind: "gpu-pcie-link-width-normal", Required: true}}
 	source := bundle.Provenance[0].Source
 	bundle.CollectorTrust.Sources = append(bundle.CollectorTrust.Sources, fleet.TrustedSource{Capability: fleet.TrustSysfsPCIeWidth, Source: source})
 	return fleetBundleWithObservations(t, bundle, observations...)
+}
+
+func fleetWidthPair(t *testing.T, id string, function, root, peer model.AssetRef, source model.SourceRef, peerKind string, at, expires time.Time) []model.Observation {
+	t.Helper()
+	dimensions := fleetWidthDimensions(root, peer, peerKind, pcie.ProvenanceAdjacentCapabilityMin)
+	return []model.Observation{
+		fleetWidthObservation(t, id+"-current", function, source, pcie.SignalLinkWidthCurrent, model.NewIntValue(16), at, expires, dimensions),
+		fleetWidthObservation(t, id+"-expected", function, source, pcie.SignalLinkWidthExpected, model.NewIntValue(16), at, expires, dimensions),
+	}
+}
+
+func fleetAssertWidthUnknown(t *testing.T, bundle fleet.AssessmentBundle, now time.Time) {
+	t.Helper()
+	decision, err := fleet.EvaluateDevice(bundle, nil, now)
+	if err != nil {
+		t.Fatalf("EvaluateDevice: %v", err)
+	}
+	if decision.Phase != fleet.PhasePending || decision.Qualification != fleet.QualificationUnknown || decision.AcceptedNormalPoint || !decision.ValidUntil.IsZero() || len(decision.Coverage) != 1 || decision.Coverage[0].State != fleet.CoverageUnknown {
+		t.Fatalf("unmatched width proof = %#v", decision)
+	}
 }
 
 // GFL-009/GFL-031: the ratified PCIe current/expected schema produces Normal
@@ -411,6 +435,103 @@ func TestGFL_009_031_PCIeWidthNormalMeasurement(t *testing.T) {
 	decision, err := fleet.EvaluateDevice(bundle, nil, now)
 	if err != nil || !decision.AcceptedNormalPoint || len(decision.Coverage) != 1 || decision.Coverage[0].State != fleet.CoverageNormal {
 		t.Fatalf("explicit normal pair = %#v/%v", decision, err)
+	}
+}
+
+// GFL-017/GFL-020A/GFL-031 with PCIE-006/007: width metadata must name the
+// actual root and immediate physical peer on the bound function's observed
+// path. Merely including the named assets elsewhere in the graph is not proof.
+func TestGFL_017_020A_031_PCIeWidthRequiresActualPathCorrespondence(t *testing.T) {
+	now := fleetT0.Add(50 * time.Minute)
+	function, root, node := fleetTopologyAssets(t)
+	unrelatedRoot := fleetAsset(t, model.KindPCIeRootPort, string(model.NamespacePCIBDF), "0000:62:00.0")
+	edges := []graph.Edge{
+		fleetObservedEdge(t, function, root, model.RelLocatedIn),
+		fleetObservedEdge(t, root, node, model.RelLocatedIn),
+		fleetObservedEdge(t, unrelatedRoot, node, model.RelLocatedIn),
+	}
+	base := fleetReplaceTopology(t, fleetBundle(t, now, 0, fleet.DesiredInService), []model.AssetRef{function, root, unrelatedRoot, node}, edges)
+	source := base.Provenance[0].Source
+
+	valid := fleetConfigureWidthBundle(t, base, fleetWidthPair(t, "actual-path", function, root, root, source, model.KindPCIeRootPort.String(), now, now.Add(time.Minute))...)
+	control, err := fleet.EvaluateDevice(valid, nil, now)
+	if err != nil || !control.AcceptedNormalPoint || len(control.Coverage) != 1 || control.Coverage[0].State != fleet.CoverageNormal {
+		t.Fatalf("actual-path positive control = %#v/%v", control, err)
+	}
+
+	t.Run("unrelated present root and peer", func(t *testing.T) {
+		observations := fleetWidthPair(t, "unrelated-root", function, unrelatedRoot, unrelatedRoot, source, model.KindPCIeRootPort.String(), now, now.Add(time.Minute))
+		fleetAssertWidthUnknown(t, fleetConfigureWidthBundle(t, base, observations...), now)
+	})
+	t.Run("correct root but unrelated present peer", func(t *testing.T) {
+		observations := fleetWidthPair(t, "unrelated-peer", function, root, unrelatedRoot, source, model.KindPCIeRootPort.String(), now, now.Add(time.Minute))
+		fleetAssertWidthUnknown(t, fleetConfigureWidthBundle(t, base, observations...), now)
+	})
+}
+
+// GFL-017/GFL-020A/GFL-031 with PCIE-006/007: on a valid switch chain the
+// adjacent peer is the first observed parent, while a farther on-chain root is
+// not interchangeable with that peer.
+func TestGFL_017_020A_031_PCIeWidthUsesImmediateSwitchPeer(t *testing.T) {
+	now := fleetT0.Add(50 * time.Minute)
+	function, root, node := fleetTopologyAssets(t)
+	switchAsset := fleetAsset(t, model.KindPCIeSwitch, string(model.NamespacePCIBDF), "0000:63:00.0")
+	edges := []graph.Edge{
+		fleetObservedEdge(t, function, switchAsset, model.RelLocatedIn),
+		fleetObservedEdge(t, switchAsset, root, model.RelLocatedIn),
+		fleetObservedEdge(t, root, node, model.RelLocatedIn),
+	}
+	base := fleetReplaceTopology(t, fleetBundle(t, now, 0, fleet.DesiredInService), []model.AssetRef{function, switchAsset, root, node}, edges)
+	source := base.Provenance[0].Source
+
+	immediate := fleetWidthPair(t, "immediate-switch", function, root, switchAsset, source, model.KindPCIeSwitch.String(), now, now.Add(time.Minute))
+	control, err := fleet.EvaluateDevice(fleetConfigureWidthBundle(t, base, immediate...), nil, now)
+	if err != nil || !control.AcceptedNormalPoint || len(control.Coverage) != 1 || control.Coverage[0].State != fleet.CoverageNormal {
+		t.Fatalf("immediate-switch positive control = %#v/%v", control, err)
+	}
+
+	farther := fleetWidthPair(t, "farther-root", function, root, root, source, model.KindPCIeRootPort.String(), now, now.Add(time.Minute))
+	fleetAssertWidthUnknown(t, fleetConfigureWidthBundle(t, base, farther...), now)
+}
+
+// GFL-013/GFL-017/GFL-020A/GFL-041/GFL-042: width correspondence depends on
+// fresh trusted path provenance, and the shortest provenance lifetime bounds a
+// qualified decision even when the width pair itself lives longer.
+func TestGFL_013_017_020A_041_042_PCIeWidthPathProvenanceControlsQualification(t *testing.T) {
+	now := fleetT0.Add(50 * time.Minute)
+	function, root, _ := fleetTopologyAssets(t)
+	source := model.SourceRef{Type: string(model.SourceTypeAgent), Name: "collector"}
+	observations := fleetWidthPair(t, "provenance", function, root, root, source, model.KindPCIeRootPort.String(), now, now.Add(time.Minute))
+
+	trusted := fleetWidthBundle(t, now, observations...)
+	control, err := fleet.EvaluateDevice(trusted, nil, now)
+	if err != nil || !control.AcceptedNormalPoint || control.Coverage[0].State != fleet.CoverageNormal {
+		t.Fatalf("fresh trusted positive control = %#v/%v", control, err)
+	}
+
+	expired := fleetWidthBundle(t, now, observations...)
+	expired.Provenance[0].ObservedAt = now.Add(-time.Second)
+	expired.Provenance[0].ExpiresAt = now
+	fleetAssertWidthUnknown(t, expired, now)
+
+	untrusted := fleetWidthBundle(t, now, observations...)
+	untrusted.Provenance[0].Source = model.SourceRef{Type: string(model.SourceTypeAgent), Name: "untrusted-path"}
+	fleetAssertWidthUnknown(t, untrusted, now)
+
+	firstAt := now
+	secondAt := firstAt.Add(30 * time.Second)
+	firstPair := fleetWidthPair(t, "deadline-first", function, root, root, source, model.KindPCIeRootPort.String(), firstAt, firstAt.Add(time.Minute))
+	first, err := fleet.EvaluateDevice(fleetConfigureWidthBundle(t, fleetBundle(t, firstAt, 0, fleet.DesiredInService), firstPair...), nil, firstAt)
+	if err != nil || !first.AcceptedNormalPoint {
+		t.Fatalf("deadline first point = %#v/%v", first, err)
+	}
+	secondPair := fleetWidthPair(t, "deadline-second", function, root, root, source, model.KindPCIeRootPort.String(), secondAt, secondAt.Add(time.Minute))
+	secondBundle := fleetConfigureWidthBundle(t, fleetBundle(t, secondAt, 1, fleet.DesiredInService), secondPair...)
+	pathDeadline := secondAt.Add(10 * time.Second)
+	secondBundle.Provenance[0].ExpiresAt = pathDeadline
+	second, err := fleet.EvaluateDevice(secondBundle, &first, secondAt)
+	if err != nil || !second.AcceptedNormalPoint || second.Phase != fleet.PhaseReady || second.Qualification != fleet.QualificationQualified || !second.ValidUntil.Equal(pathDeadline) {
+		t.Fatalf("short path deadline = %#v/%v, want %s", second, err, pathDeadline)
 	}
 }
 
