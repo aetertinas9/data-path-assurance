@@ -23,9 +23,15 @@ gofmt -l .
 ```
 
 `make all` builds all current packages, runs `go vet`, and checks domain-core
-dependency boundaries. The `test` target runs the Go test suite. The race check
-is separate, and `gofmt -l .` lists files whose formatting differs from
-`gofmt` output; no output means all checked Go files are formatted.
+dependency boundaries, including the boundary around `internal/fleet`. The
+`test` target runs the Go test suite. The race check is separate, and
+`gofmt -l .` lists files whose formatting differs from `gofmt` output; no
+output means all checked Go files are formatted.
+
+The fleet library provides pure snapshot admission, GPU lifecycle and
+qualification evaluation, node aggregation, and scheduling-gate decisions from
+explicitly supplied policy, evidence, and time. It does not collect live host
+or Kubernetes data, and a gate decision does not mutate Kubernetes.
 
 There is no runtime command or cluster installation procedure yet. In
 particular, do not expect `pathctl`, an agent, a controller, or Kubernetes
@@ -33,13 +39,11 @@ resources to be present in the current source tree.
 
 ## What comes next
 
-The intended next product surface adds source adapters and a separately
-integrated Kubernetes layer around the domain core. That layer is expected to
-represent real GPU UUID, Node UID and incarnation, and PCI BDF relationships;
-publish `GPUFleet`, `GPUDevice`, and `NodePathState`; and support explainable
-readiness and lifecycle qualification.
+The next milestone adds injected host/sysfs and NVIDIA inventory fixture
+collection plus an application-level offline explain flow. Later milestones
+add Kubernetes APIs and transport, followed by an Audit deployment.
 
-Those capabilities are future targets. They should not be treated as available
-for deployment or as validated against real GPU hardware. See
-[Architecture](architecture.md) for the planned data flow and ownership
+Those executable capabilities are future targets. They should not be treated
+as available for deployment or as validated against real GPU hardware. See
+[Architecture](architecture.md) for the planned adapter flow and ownership
 boundaries.

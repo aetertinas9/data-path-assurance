@@ -36,10 +36,37 @@ The PCIe domain evaluates persistent negotiated-width degradation against an
 expected width. It is passive and does not reset devices, change drivers, or
 alter host state.
 
-## Target GPU fleet lifecycle
+`internal/fleet` adds pure GPU and node evaluation to this core. Its public
+functions are `NewPolicy`, `AdmitSnapshot`, `EvaluateDevice`, `AggregateNode`,
+and `EvaluateGate`. They consume explicitly supplied policy, evidence, and time
+and return domain values or actions. A scheduling-gate action is a
+decision value; the package does not mutate Kubernetes.
 
-The following flow describes the intended product architecture. Its adapters,
-control plane, and Kubernetes resources are not implemented yet.
+Snapshot admission distinguishes accepted, duplicate, older or out-of-order,
+gap, wrong-session, and conflicting input. A duplicate preserves the admitted
+original. Fresh evidence and distinct accepted normal points drive readiness,
+and identity, request, or policy changes reset that progress. Unknown is not
+success evidence.
+
+GPU identity is bound to node UID, boot identity, and PCI BDF through trusted
+observed evidence. Maintenance or retirement completion requires a trusted
+fence matching the current intent and a complete, fresh allocation-empty
+assessment. These are evaluations of supplied inputs, not host collection or
+cluster operations.
+
+Current qualification coverage is limited to the GPU PCIe parent path, root
+path, and link-width evidence. GPU/NIC shared-ancestor proof is not implemented
+and remains Unknown; live LLDP coverage also remains Unknown until collection
+is added.
+
+The domain packages, including `internal/fleet`, are protected from direct and
+transitive imports of external adapters.
+
+## Target executable integration
+
+The following flow describes the intended integration around the implemented
+domain libraries. Its adapters, control plane, and Kubernetes resources are not
+implemented yet.
 
 ```mermaid
 flowchart LR
@@ -73,7 +100,8 @@ does not own active GPU workloads, device reset, node drain, or driver
 management. A GPU operator or another cluster operator continues to perform
 those actions.
 
-The planned lifecycle and Kubernetes surfaces have not been validated on real
-GPUs and are not available for installation. The only implemented domain rule
-described here is persistent PCIe link-width evaluation; broader device and
-fleet decisions remain product direction.
+The fleet library evaluates supplied identity, evidence, lifecycle intent, and
+allocation state. It does not collect those inputs from a real host or cluster.
+Collectors, transport, Kubernetes APIs, and deployment remain future work, and
+the system has not been validated on real GPUs or made available for
+installation.

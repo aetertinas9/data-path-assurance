@@ -14,26 +14,35 @@ service. The implemented core includes:
 - typed identity handling in `internal/identity`;
 - immutable evidence processing in `internal/evidence`;
 - an immutable physical graph maintained by a single-writer reducer in
-  `internal/graph`; and
+  `internal/graph`;
 - deterministic evaluation of persistent PCIe link-width degradation in
-  `internal/domains/pcie`.
+  `internal/domains/pcie`; and
+- pure GPU device lifecycle, qualification, node aggregation, and scheduling-gate
+  evaluation in `internal/fleet`.
 
 PCIe evaluation is passive: it compares negotiated and expected link width
-from supplied evidence and produces deterministic results. Source adapters,
-agents, controllers, `pathctl`, Kubernetes custom resources, and deployment
-manifests are not implemented yet.
+from supplied evidence and produces deterministic results. The fleet package
+provides `NewPolicy`, `AdmitSnapshot`, `EvaluateDevice`, `AggregateNode`, and
+`EvaluateGate`. These functions consume explicitly supplied policy, evidence,
+and time and return domain values or actions; gate decisions do not mutate
+Kubernetes.
+
+Snapshot admission distinguishes accepted, duplicate, older or out-of-order,
+gap, wrong-session, and conflicting input. Device evaluation binds a GPU UUID
+to trusted observed node UID, boot identity, and PCI BDF evidence. Unknown
+results are not treated as successful evidence.
 
 ## Product direction
 
-The planned lifecycle layer will model the physical path between a real GPU
-UUID and its Kubernetes Node UID, node incarnation, and PCI BDF. It will keep
-observed, expected, and inferred information distinct and use three Kubernetes
-resources—`GPUFleet`, `GPUDevice`, and `NodePathState`—to support readiness,
-maintenance, return-to-service, and retirement qualification.
+The pure lifecycle evaluation layer is implemented, but its executable adapters
+are still future work. Planned host and Kubernetes adapters will collect and
+bind live identity and path evidence and expose `GPUFleet`, `GPUDevice`, and
+`NodePathState` resources. No runnable agent, controller, `pathctl`, custom
+resource deployment, live GPU collection, or live Kubernetes validation is
+available yet.
 
-This lifecycle layer is a design target, not a currently installable or
-hardware-validated product. Active GPU work, reset, drain, and driver
-management remain the responsibility of operators such as GPU Operator.
+Active GPU work, reset, drain, and driver management remain the responsibility
+of operators such as GPU Operator.
 
 ## Documentation
 
