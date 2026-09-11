@@ -689,10 +689,10 @@ func assessWidth(b AssessmentBundle, binding ObservedBinding, req CoverageRequir
 			}
 			continue
 		}
-		pathProofs, pathOK := widthPathProofs(b, binding.Function, current.o.Dimensions, now)
-		if !pathOK {
+		pathProofs, pathReason := widthPathProofs(b, binding.Function, current.o.Dimensions, now)
+		if pathReason != "" {
 			if atGlobalLatest {
-				return widthUnknown(a, reasonCoverageUnknown)
+				return widthUnknown(a, pathReason)
 			}
 			continue
 		}
@@ -833,14 +833,14 @@ func validWidthDimensions(d map[string]string, subject model.AssetRef) bool {
 	p := d[pcie.DimensionExpectedProvenance]
 	return p == pcie.ProvenanceAdjacentCapabilityMin || p == pcie.ProvenanceOperatorVerifiedWiring
 }
-func widthPathProofs(b AssessmentBundle, function model.AssetRef, d map[string]string, now time.Time) ([]EdgeProvenance, bool) {
+func widthPathProofs(b AssessmentBundle, function model.AssetRef, d map[string]string, now time.Time) ([]EdgeProvenance, string) {
 	if !hasCapability(b.CollectorTrust, TrustSysfsPhysicalParent) {
-		return nil, false
+		return nil, reasonUntrustedSource
 	}
 	wantRoot := model.AssetRef{Kind: model.KindPCIeRootPort, Canonical: d[pcie.DimensionRootCanonical]}
 	peerKind, ok := widthPeerKind(d[pcie.DimensionPeerKind])
 	if !ok {
-		return nil, false
+		return nil, reasonCoverageUnknown
 	}
 	wantPeer := model.AssetRef{Kind: peerKind, Canonical: d[pcie.DimensionPeerCanonical]}
 	current := function
@@ -856,33 +856,45 @@ func widthPathProofs(b AssessmentBundle, function model.AssetRef, d map[string]s
 			}
 		}
 		if len(parents) != 1 {
-			return nil, false
+			return nil, reasonCoverageUnknown
 		}
 		proof, found := findProvenance(b.Provenance, parents[0], EdgeEvidenceObserved)
-		if !found || !trusted(b.CollectorTrust, TrustSysfsPhysicalParent, proof.Source) || proof.CollectorProfileID != b.CollectorTrust.ID || proof.ObservedAt.After(now) || proof.ObservedAt.Before(b.Intent.ObservedAt) || !fresh(proof.ObservedAt, proof.ExpiresAt, b.Policy.Freshness, now) {
-			return nil, false
+		if !found {
+			return nil, reasonCoverageUnknown
+		}
+		if !trusted(b.CollectorTrust, TrustSysfsPhysicalParent, proof.Source) || proof.CollectorProfileID != b.CollectorTrust.ID {
+			return nil, reasonUntrustedSource
+		}
+		if proof.ObservedAt.After(now) {
+			return nil, reasonFutureObservation
+		}
+		if proof.ObservedAt.Before(b.Intent.ObservedAt) || !fresh(proof.ObservedAt, proof.ExpiresAt, b.Policy.Freshness, now) {
+			return nil, reasonCoverageUnknown
 		}
 		proofs = append(proofs, proof)
 		current = proof.Edge.To
 		stored, err := b.Topology.Asset(current)
 		if err != nil || stored.Key() != current.Key() || (current.Kind != model.KindPCIeSwitch && current.Kind != model.KindPCIeRootPort) {
-			return nil, false
+			return nil, reasonCoverageUnknown
 		}
 		if len(proofs) == 1 {
 			peer = current
 		}
 		if _, exists := seen[current.Key()]; exists {
-			return nil, false
+			return nil, reasonCoverageUnknown
 		}
 		seen[current.Key()] = struct{}{}
 		if current.Kind == model.KindPCIeRootPort {
 			if rootAncestryContradicts(b, current, seen) {
-				return nil, false
+				return nil, reasonCoverageUnknown
 			}
-			return proofs, current.Key() == wantRoot.Key() && peer.Key() == wantPeer.Key()
+			if current.Key() != wantRoot.Key() || peer.Key() != wantPeer.Key() {
+				return nil, reasonCoverageUnknown
+			}
+			return proofs, ""
 		}
 	}
-	return nil, false
+	return nil, reasonCoverageUnknown
 }
 func widthPeerKind(value string) (model.AssetKind, bool) {
 	switch value {
