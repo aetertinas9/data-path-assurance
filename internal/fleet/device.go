@@ -689,7 +689,8 @@ func assessWidth(b AssessmentBundle, binding ObservedBinding, req CoverageRequir
 			}
 			continue
 		}
-		if !widthEndpointsPresent(b.Topology, current.o.Dimensions) {
+		pathProofs, pathOK := widthPathProofs(b, binding.Function, current.o.Dimensions, now)
+		if !pathOK {
 			if atGlobalLatest {
 				return widthUnknown(a, reasonCoverageUnknown)
 			}
@@ -725,6 +726,16 @@ func assessWidth(b AssessmentBundle, binding ObservedBinding, req CoverageRequir
 			latestPairFound = true
 			a.EvidenceIDs = append(a.EvidenceIDs, current.o.ID, expected.o.ID)
 			a.ExpiresAt = minTime(a.ExpiresAt, minTime(deadline(current.o.ObservedAt, current.o.ExpiresAt, b.Policy.Freshness), deadline(expected.o.ObservedAt, expected.o.ExpiresAt, b.Policy.Freshness)))
+			for _, proof := range pathProofs {
+				a.EvidenceIDs = append(a.EvidenceIDs, proof.EvidenceID)
+				a.ExpiresAt = minTime(a.ExpiresAt, deadline(proof.ObservedAt, proof.ExpiresAt, b.Policy.Freshness))
+				if a.ObservedAt.IsZero() || proof.ObservedAt.Before(a.ObservedAt) {
+					a.ObservedAt = proof.ObservedAt
+				}
+				if proof.ObservedAt.After(a.LatestObservedAt) {
+					a.LatestObservedAt = proof.ObservedAt
+				}
+			}
 		}
 	}
 	if !latestPairFound || referenceNormal == nil {
@@ -734,15 +745,23 @@ func assessWidth(b AssessmentBundle, binding ObservedBinding, req CoverageRequir
 		a.State = CoverageMissing
 		a.Reason = reasonCoverageMissing
 		a.EvidenceIDs = sortedUnique(a.EvidenceIDs)
-		a.ObservedAt = latest
-		a.LatestObservedAt = latest
+		if a.ObservedAt.IsZero() || latest.Before(a.ObservedAt) {
+			a.ObservedAt = latest
+		}
+		if latest.After(a.LatestObservedAt) {
+			a.LatestObservedAt = latest
+		}
 		return a
 	}
 	a.State = CoverageNormal
 	a.Reason = "Normal"
 	a.EvidenceIDs = sortedUnique(a.EvidenceIDs)
-	a.ObservedAt = latest
-	a.LatestObservedAt = latest
+	if a.ObservedAt.IsZero() || latest.Before(a.ObservedAt) {
+		a.ObservedAt = latest
+	}
+	if latest.After(a.LatestObservedAt) {
+		a.LatestObservedAt = latest
+	}
 	return a
 }
 func widthUnknown(a CoverageAssessment, reason string) CoverageAssessment {
@@ -814,22 +833,56 @@ func validWidthDimensions(d map[string]string, subject model.AssetRef) bool {
 	p := d[pcie.DimensionExpectedProvenance]
 	return p == pcie.ProvenanceAdjacentCapabilityMin || p == pcie.ProvenanceOperatorVerifiedWiring
 }
-func widthEndpointsPresent(topology *graph.Snapshot, d map[string]string) bool {
-	if topology == nil {
-		return false
+func widthPathProofs(b AssessmentBundle, function model.AssetRef, d map[string]string, now time.Time) ([]EdgeProvenance, bool) {
+	if !hasCapability(b.CollectorTrust, TrustSysfsPhysicalParent) {
+		return nil, false
 	}
-	root := model.AssetRef{Kind: model.KindPCIeRootPort, Canonical: d[pcie.DimensionRootCanonical]}
+	wantRoot := model.AssetRef{Kind: model.KindPCIeRootPort, Canonical: d[pcie.DimensionRootCanonical]}
 	peerKind, ok := widthPeerKind(d[pcie.DimensionPeerKind])
 	if !ok {
-		return false
+		return nil, false
 	}
-	peer := model.AssetRef{Kind: peerKind, Canonical: d[pcie.DimensionPeerCanonical]}
-	storedRoot, err := topology.Asset(root)
-	if err != nil || storedRoot.Key() != root.Key() {
-		return false
+	wantPeer := model.AssetRef{Kind: peerKind, Canonical: d[pcie.DimensionPeerCanonical]}
+	current := function
+	seen := map[string]struct{}{current.Key(): {}}
+	var proofs []EdgeProvenance
+	var peer model.AssetRef
+	for steps := 0; steps < 4096; steps++ {
+		edges, _ := b.Topology.EdgesFrom(current)
+		var parents []graph.Edge
+		for _, edge := range edges {
+			if edge.Relation == model.RelLocatedIn && edge.Origin == model.OriginObserved {
+				parents = append(parents, edge)
+			}
+		}
+		if len(parents) != 1 {
+			return nil, false
+		}
+		proof, found := findProvenance(b.Provenance, parents[0], EdgeEvidenceObserved)
+		if !found || !trusted(b.CollectorTrust, TrustSysfsPhysicalParent, proof.Source) || proof.CollectorProfileID != b.CollectorTrust.ID || proof.ObservedAt.After(now) || proof.ObservedAt.Before(b.Intent.ObservedAt) || !fresh(proof.ObservedAt, proof.ExpiresAt, b.Policy.Freshness, now) {
+			return nil, false
+		}
+		proofs = append(proofs, proof)
+		current = proof.Edge.To
+		stored, err := b.Topology.Asset(current)
+		if err != nil || stored.Key() != current.Key() || (current.Kind != model.KindPCIeSwitch && current.Kind != model.KindPCIeRootPort) {
+			return nil, false
+		}
+		if len(proofs) == 1 {
+			peer = current
+		}
+		if _, exists := seen[current.Key()]; exists {
+			return nil, false
+		}
+		seen[current.Key()] = struct{}{}
+		if current.Kind == model.KindPCIeRootPort {
+			if rootAncestryContradicts(b, current, seen) {
+				return nil, false
+			}
+			return proofs, current.Key() == wantRoot.Key() && peer.Key() == wantPeer.Key()
+		}
 	}
-	storedPeer, err := topology.Asset(peer)
-	return err == nil && storedPeer.Key() == peer.Key()
+	return nil, false
 }
 func widthPeerKind(value string) (model.AssetKind, bool) {
 	switch value {
