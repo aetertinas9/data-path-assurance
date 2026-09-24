@@ -62,6 +62,22 @@ is added.
 The domain packages, including `internal/fleet`, are protected from direct and
 transitive imports of external adapters.
 
+### Native PCIe observer adapter
+
+`internal/nativepcie` is an adapter, not part of the domain core. It bridges
+through cgo to `libdpa_pcie` (`internal/nativepcie/csrc`), a bounded C11 library
+that only parses caller-supplied sysfs text and reads caller-opened
+descriptors from offset zero. The C code never opens a path, reads the
+environment, allocates, spawns threads, handles signals, or logs, and it keeps
+no state between calls. `ReadDevice` resolves every device path through a
+caller-injected `*os.Root` (invariant 7: no `/sys` constant) and returns raw
+per-field facts with independent statuses. It performs no discovery, identity
+resolution, topology inference, or readiness/health evaluation; feeding its
+observations into evidence remains future host-adapter work. `make arch-check`
+rejects any domain-core dependency on `internal/nativepcie` or on cgo. On
+unsupported targets or with `CGO_ENABLED=0` the package is an unavailable
+stub.
+
 ## Target executable integration
 
 The following flow describes the intended integration around the implemented
