@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gfoFastNICs creates n NIC functions (class only, optional widths) under
@@ -218,6 +219,7 @@ func TestGFO095_EdgeBound(t *testing.T) {
 func TestGFO095_StdoutBound(t *testing.T) {
 	t.Parallel()
 	bin := gfoBuildAgent(t)
+	holdHeavyFixture(t)
 	const frames, nics = 9, 4094
 	// Self-check of the premise with the independent encoder: one frame's
 	// payload alone is 4094 * 2077 bytes + fixed part.
@@ -229,7 +231,10 @@ func TestGFO095_StdoutBound(t *testing.T) {
 		f.Dev(i, gfoBridge(gfoHB, "0000:00:01.0"))
 		gfoFastNICs(t, f, i, nics, []string{gfoHB, "0000:00:01.0"}, true)
 	}
-	f.Fail(bin, 4, "GFO-095 stdout > 64 MiB")
+	f.save()
+	// The 5-minute timeout only guards against a hang of this large run; GFO-095 sets no time limit.
+	res := gfoExec(t, bin, gfoRunOpt{Timeout: 5 * time.Minute}, "--fixture-root", f.Root)
+	gfoFail(t, res, 4, "GFO-095 stdout > 64 MiB")
 }
 
 // GFO-096: a bound exceeded in any frame writes nothing at all (not even the

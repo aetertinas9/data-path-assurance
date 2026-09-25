@@ -74,15 +74,32 @@ CGO_ENABLED=0 go build -o bin/path-agent ./cmd/path-agent
 bin/path-agent --fixture-root path/to/fixture > snapshot.json
 ```
 
+## Offline explain
+
+`pathctl explain` evaluates that snapshot together with an offline fleet file
+(`dpa.offline-fleet/v1`: the fleet policy and the GPU device intents for the
+node in the snapshot; see the README for an example) and explains one GPU or
+the node:
+
+```sh
+CGO_ENABLED=0 go build -o bin/pathctl ./cmd/pathctl
+bin/pathctl explain gpu <gpu-device-name> --artifact snapshot.json --fleet fleet.json
+bin/pathctl explain node <node-name> --artifact snapshot.json --fleet fleet.json --output json
+```
+
+The result is always marked `offline`. The live transport flags (`--server`,
+`--cluster-id`, `--ca-file`, `--cert-file`, `--key-file`) are rejected with exit
+code 5 until the controller API exists.
+
 There is no live runtime or cluster installation procedure yet. In
-particular, do not expect `pathctl`, a live agent, a controller, or Kubernetes
-resources to be present in the current source tree.
+particular, do not expect a live agent, a controller, or Kubernetes resources
+to be present in the current source tree.
 
 ## What comes next
 
-Offline sysfs and NVIDIA inventory fixture collection is in place. The next
-milestone adds an application-level offline evaluation and explain flow. Later milestones
-add Kubernetes APIs and transport, followed by an Audit deployment.
+Offline sysfs and NVIDIA inventory fixture collection and the offline
+evaluation and explain flow are in place. The next milestones add Kubernetes
+APIs and transport, followed by an Audit deployment.
 
 Those executable capabilities are future targets. They should not be treated
 as available for deployment or as validated against real GPU hardware. See

@@ -7,8 +7,9 @@ decisions can be traced back to observations.
 
 ## Current capabilities
 
-The repository currently provides domain libraries and an offline fixture
-collector rather than an installable service. The implemented code includes:
+The repository currently provides domain libraries and two offline tools, a
+fixture collector and an explain command, rather than an installable service.
+The implemented code includes:
 
 - shared domain types in `pkg/model`;
 - typed identity handling in `internal/identity`;
@@ -20,9 +21,12 @@ collector rather than an installable service. The implemented code includes:
 - pure GPU device lifecycle, qualification, node aggregation, and scheduling-gate
   evaluation in `internal/fleet`;
 - a bounded native PCIe observer, `libdpa_pcie`, with its Go bridge in
-  `internal/nativepcie` (see below); and
+  `internal/nativepcie` (see below);
 - an offline host collector in `internal/agent`, run by `path-agent` in
-  fixture mode (see below).
+  fixture mode (see below); and
+- an offline evaluation and explain flow: artifact and fleet file readers in
+  `internal/offline`, the evaluation in `internal/app`, and the command-line
+  adapter in `internal/cli/explain`, run by `pathctl explain` (see below).
 
 PCIe evaluation is passive: it compares negotiated and expected link width
 from supplied evidence and produces deterministic results. The fleet package
@@ -159,10 +163,73 @@ not implemented yet). `internal/agent` also provides `RunNVIDIAQuery`, a
 bounded `nvidia-smi` runner (absolute path, no shell, fixed arguments, 5 s
 timeout, 64 KiB stdout, 4 KiB stderr) for the future live mode.
 
-This is offline fixture collection only. It does not observe a live host, does
-not yet evaluate or explain a snapshot, and has not been run against real GPU
-hardware. The collector is pure Go and does not use the native PCIe observer.
+This is offline fixture collection only. It does not observe a live host and
+has not been run against real GPU hardware. `pathctl explain` (below) evaluates
+and explains the artifact. The collector is pure Go and does not use the native PCIe observer.
 Its tests have been run on macOS arm64 and in a linux/arm64 container.
+
+## Offline explain
+
+`pathctl explain` evaluates a `path-agent` snapshot artifact offline and
+explains the result for one GPU or one node:
+
+```sh
+CGO_ENABLED=0 go build -o bin/pathctl ./cmd/pathctl
+bin/pathctl explain gpu gpu-node-1-gpu0 --artifact snapshot.json --fleet fleet.json
+bin/pathctl explain node gpu-node-1 --artifact snapshot.json --fleet fleet.json --output json
+```
+
+The second input is an offline fleet file (`dpa.offline-fleet/v1`). It holds
+the fleet policy and the GPU device intents for the single node that the
+artifact describes:
+
+```json
+{"schemaVersion":"dpa.offline-fleet/v1","clusterID":"lab-a",
+ "fleet":{"name":"lab-a-gpus","uid":"5d7c1b7e-2f0a-4c11-9a51-0b6e3c2d4f10"},
+ "policy":{"revision":"gpu-path-v1","freshnessSeconds":60,"readyForSeconds":30,
+  "requiredCoverage":[
+   {"name":"pcie-parent","pathKind":"gpu-pcie-parent","required":true},
+   {"name":"pcie-root","pathKind":"gpu-pcie-root","required":true},
+   {"name":"pcie-width","pathKind":"gpu-pcie-link-width-normal","required":true},
+   {"name":"nic-lldp","pathKind":"nic-lldp-remote","required":false}]},
+ "devices":[{"name":"gpu-node-1-gpu0","uid":"0b5f3c9a-6e2d-4f8b-a1c7-3d9e5f2a7b41",
+  "nodeRef":{"name":"gpu-node-1","uid":"7c9e6679-7425-40de-944b-e07fc1f90ae7"},
+  "desiredState":"InService","requestID":"enroll-1","metadataGeneration":1,
+  "intentObservedAt":"2026-09-24T00:00:00Z",
+  "inventoryClaim":{"vendor":"NVIDIA","uuid":"GPU-5f0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d",
+   "source":"operator/asset-db","evidenceID":"asset-db:rack7-u12-gpu0"}}]}
+```
+
+The reader rejects an artifact whose payload digest, evidence IDs, or bundle
+revisions do not match an independent recomputation, and a fleet file whose
+cluster or node UID differs from the artifact. The evaluation admits the
+frames in order (the first frame must be complete), evaluates each frame at
+its own observed time with no wall clock, keeps link-width evidence across
+frames so that a sustained width degradation can be recognized, and runs the
+existing PCIe width rule, `EvaluateDevice`, and `AggregateNode`. The same
+inputs always produce the same bytes.
+
+The output shows the observed GPU PCIe path with the provenance of each hop,
+active findings, every coverage requirement with its state and reason, the
+identity binding, allocation, and a list of limitations. `--output json` (field
+names follow the planned controller explain API) and the default text form
+carry the same content; text sections are `PATH`, `FINDINGS`, `COVERAGE`,
+`ALLOCATION`, and `LIMITATIONS`. Unknown results always carry their reason, and
+collector diagnostics, a GPU directly below a host bridge, contradictory paths,
+and findings from untrusted sources are shown as limitations without changing
+the evaluated result.
+
+Exit codes are 0 (explanation written, whatever the result), 1 (internal
+error), 2 (usage error), 4 (device or node not found), 5 (a live transport flag
+such as `--server` was given; the live path is not implemented yet),
+6 (invalid artifact), 7 (invalid fleet file), and 8 (an input or the output
+exceeds its size bound).
+
+Every result is marked `offline`. Offline evidence is never treated as live
+trust, and nothing is published to Kubernetes. The offline input has no
+allocation or fence data, so maintenance and retirement can be shown as
+pending but never as complete. Inputs near the artifact size bounds (tens of
+thousands of observations in one frame) can take a minute or more to evaluate.
 
 ## Product direction
 
@@ -171,9 +238,9 @@ are still future work. Planned host and Kubernetes adapters will collect and
 bind live identity and path evidence and expose `GPUFleet`, `GPUDevice`, and
 `NodePathState` resources. The native PCIe observer is a building block for
 that host adapter, not the adapter itself. `path-agent` runs only in offline
-fixture mode. No live agent, controller, `pathctl`, custom resource
-deployment, live GPU collection, or live Kubernetes validation is available
-yet.
+fixture mode, and `pathctl` has only the offline explain path. No live agent,
+controller, controller explain API, custom resource deployment, live GPU
+collection, or live Kubernetes validation is available yet.
 
 Active GPU work, reset, drain, and driver management remain the responsibility
 of operators such as GPU Operator.

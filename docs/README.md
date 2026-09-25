@@ -7,5 +7,5 @@ data-path-assurance.
 - [Project overview](../README.md) — purpose, current capabilities, and status
 - [Architecture](architecture.md) — implemented core and fleet evaluation,
   target adapter flow, and operational boundaries
-- [Getting started](getting-started.md) — source checks available today and
-  the current deployment limitation
+- [Getting started](getting-started.md) — source checks, offline collection and
+  explain, and the current deployment limitation

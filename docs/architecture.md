@@ -6,10 +6,11 @@ the edge of the application.
 
 ## Implemented core
 
-The current code is a library-level domain core plus an offline host
-collector: `internal/agent`, run by `path-agent --fixture-root`, turns a fixture
-sysfs tree and canned NVIDIA inventory into a JSON snapshot artifact. It has no
-live agent, controller, `pathctl`, Kubernetes adapter, or custom resources.
+The current code is a library-level domain core plus two offline tools.
+`internal/agent`, run by `path-agent --fixture-root`, turns a fixture sysfs tree
+and canned NVIDIA inventory into a JSON snapshot artifact. `pathctl explain`
+evaluates that artifact offline (see [Offline explain](#offline-explain)). There
+is no live agent, controller, Kubernetes adapter, or custom resources.
 
 Arrows point from a shared building block to the package that consumes it.
 
@@ -80,6 +81,37 @@ rejects any domain-core dependency on `internal/nativepcie` or on cgo. On
 unsupported targets or with `CGO_ENABLED=0` the package is an unavailable
 stub.
 
+### Offline explain
+
+`pathctl explain` is wired in `cmd/pathctl` from three packages. Each arrow
+points from a package to the package it hands values to.
+
+```mermaid
+flowchart LR
+    A["path-agent artifact<br/>dpa.offline-snapshot/v1"]
+    F["offline fleet file<br/>dpa.offline-fleet/v1"]
+    O["internal/offline<br/>strict readers,<br/>independent digest and ID check"]
+    P["internal/app<br/>replay evaluation and<br/>explanation model"]
+    D["internal/fleet · internal/graph ·<br/>internal/evidence · internal/domains/pcie"]
+    C["internal/cli/explain<br/>arguments, exit codes,<br/>JSON and text output"]
+
+    A --> O
+    F --> O
+    O --> P
+    D --> P
+    P --> C
+```
+
+`internal/offline` is a driven adapter. It reads the two files, recomputes the
+artifact digests and IDs independently of the collector, and converts the
+frames into domain values. `internal/app` belongs to the domain core checked by
+`make arch-check`: it runs the frame admission chain, evaluates each frame at
+its own observed time, and assembles the explanation without depending on file
+formats or I/O, so the future controller explain API can reuse it.
+`internal/cli/explain` is the driving adapter that parses arguments and formats
+the explanation. The command depends on neither `internal/agent` nor the native
+PCIe observer and builds with `CGO_ENABLED=0`.
+
 ## Target executable integration
 
 The following flow describes the intended integration around the implemented
@@ -119,7 +151,8 @@ management. A GPU operator or another cluster operator continues to perform
 those actions.
 
 The fleet library evaluates supplied identity, evidence, lifecycle intent, and
-allocation state. It does not collect those inputs from a real host or cluster.
+allocation state. It does not collect those inputs from a real host or cluster;
+the offline explain path evaluates recorded fixture snapshots only.
 Collectors, transport, Kubernetes APIs, and deployment remain future work, and
 the system has not been validated on real GPUs or made available for
 installation.
