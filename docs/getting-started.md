@@ -1,7 +1,8 @@
 # Getting started
 
 data-path-assurance currently supports development and validation of its Go
-domain libraries. It does not yet provide an agent, controller, `pathctl`
+domain libraries and an offline fixture mode of `path-agent`. It does not yet
+provide a live agent, controller, `pathctl`
 binary, Kubernetes custom resources, or an installable deployment.
 
 ## Prerequisites
@@ -61,14 +62,26 @@ qualification evaluation, node aggregation, and scheduling-gate decisions from
 explicitly supplied policy, evidence, and time. It does not collect live host
 or Kubernetes data, and a gate decision does not mutate Kubernetes.
 
-There is no runtime command or cluster installation procedure yet. In
-particular, do not expect `pathctl`, an agent, a controller, or Kubernetes
+## Offline fixture collection
+
+`path-agent` currently runs only against a fixture directory and writes a
+deterministic JSON snapshot to stdout (see the README for the fixture layout
+and exit codes). Sample fixtures are not shipped with the repository, so point
+`--fixture-root` at a fixture directory you prepared:
+
+```sh
+CGO_ENABLED=0 go build -o bin/path-agent ./cmd/path-agent
+bin/path-agent --fixture-root path/to/fixture > snapshot.json
+```
+
+There is no live runtime or cluster installation procedure yet. In
+particular, do not expect `pathctl`, a live agent, a controller, or Kubernetes
 resources to be present in the current source tree.
 
 ## What comes next
 
-The next milestone adds injected host/sysfs and NVIDIA inventory fixture
-collection plus an application-level offline explain flow. Later milestones
+Offline sysfs and NVIDIA inventory fixture collection is in place. The next
+milestone adds an application-level offline evaluation and explain flow. Later milestones
 add Kubernetes APIs and transport, followed by an Audit deployment.
 
 Those executable capabilities are future targets. They should not be treated

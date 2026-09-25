@@ -7,8 +7,8 @@ decisions can be traced back to observations.
 
 ## Current capabilities
 
-The repository currently provides domain libraries rather than an installable
-service. The implemented core includes:
+The repository currently provides domain libraries and an offline fixture
+collector rather than an installable service. The implemented code includes:
 
 - shared domain types in `pkg/model`;
 - typed identity handling in `internal/identity`;
@@ -18,9 +18,11 @@ service. The implemented core includes:
 - deterministic evaluation of persistent PCIe link-width degradation in
   `internal/domains/pcie`;
 - pure GPU device lifecycle, qualification, node aggregation, and scheduling-gate
-  evaluation in `internal/fleet`; and
+  evaluation in `internal/fleet`;
 - a bounded native PCIe observer, `libdpa_pcie`, with its Go bridge in
-  `internal/nativepcie` (see below).
+  `internal/nativepcie` (see below); and
+- an offline host collector in `internal/agent`, run by `path-agent` in
+  fixture mode (see below).
 
 PCIe evaluation is passive: it compares negotiated and expected link width
 from supplied evidence and produces deterministic results. The fleet package
@@ -100,15 +102,78 @@ discovers devices, resolves GPU identity, infers topology, or feeds readiness,
 health, finding, or scheduling decisions. Linux builds, containers, and real
 hardware have not been validated.
 
+## Offline fixture collection
+
+`path-agent --fixture-root <dir>` reads a fixture directory and writes one
+deterministic JSON snapshot artifact (`dpa.offline-snapshot/v1`) to stdout.
+A fixture holds `manifest.json` (`dpa.offline-fixture/v1`: cluster, node, and
+boot identity, an `offline:` trust profile with a positive session, the
+evidence TTL, 1 to 16 frame times, and optional operator width baselines), one
+sysfs tree per frame under `frames/<i>/sys/`, and optionally the canned output
+of `nvidia-smi --query-gpu=uuid,pci.bus_id --format=csv,noheader,nounits` in
+`frames/<i>/nvidia-smi.csv`.
+
+A fixture directory looks like this (one `frames/<i>/` per frame; entries under
+`bus/pci/devices/` are relative symlinks into the `devices/` tree, as on a real
+host):
+
+```text
+fixture/
+├── manifest.json
+└── frames/
+    └── 0/
+        ├── nvidia-smi.csv          optional canned nvidia-smi output
+        └── sys/
+            ├── bus/pci/devices/0000:03:00.0 -> ../../../devices/pci0000:00/0000:00:01.0/0000:01:00.0/0000:02:08.0/0000:03:00.0
+            └── devices/pci0000:00/0000:00:01.0/0000:01:00.0/0000:02:08.0/0000:03:00.0/
+                ├── class           e.g. 0x030200
+                ├── vendor          e.g. 0x10de
+                ├── current_link_width
+                └── max_link_width
+```
+
+Sample fixtures are not included in the repository; the tests build their own
+fixtures in temporary directories. Point `--fixture-root` at your own fixture:
+
+```sh
+CGO_ENABLED=0 go build -o bin/path-agent ./cmd/path-agent
+bin/path-agent --fixture-root path/to/fixture > snapshot.json
+```
+
+The collector opens the fixture through `os.Root` and follows symlinks only
+while they stay inside it. It reads `class`, `vendor`, `current_link_width`,
+and `max_link_width`, and checks whether `physfn` exists; writable attributes
+such as `numa_node`, `enable`, `remove`, `reset`, and `resource*` are never
+opened. Fixture mode starts no process and reads no clock, so the same fixture
+yields the same bytes. Each frame carries the snapshot envelope (node UID,
+boot ID, session, sequence, completeness, observed time, payload digest, and
+bundle revision), the observed `LOCATED_IN` path from each GPU and NIC
+function through PCIe switches to its root port and node, link-width
+observations, NVIDIA UUID bindings, and diagnostics. Observation failures that
+could be mistaken for a confirmed absence mark the frame `PARTIAL`; width and
+NVIDIA failures only add diagnostics.
+
+Exit codes are 0 (artifact written), 1 (internal error), 2 (usage error),
+3 (invalid fixture), 4 (bound exceeded), and 5 (live mode requested, which is
+not implemented yet). `internal/agent` also provides `RunNVIDIAQuery`, a
+bounded `nvidia-smi` runner (absolute path, no shell, fixed arguments, 5 s
+timeout, 64 KiB stdout, 4 KiB stderr) for the future live mode.
+
+This is offline fixture collection only. It does not observe a live host, does
+not yet evaluate or explain a snapshot, and has not been run against real GPU
+hardware. The collector is pure Go and does not use the native PCIe observer.
+Its tests have been run on macOS arm64 and in a linux/arm64 container.
+
 ## Product direction
 
 The pure lifecycle evaluation layer is implemented, but its executable adapters
 are still future work. Planned host and Kubernetes adapters will collect and
 bind live identity and path evidence and expose `GPUFleet`, `GPUDevice`, and
 `NodePathState` resources. The native PCIe observer is a building block for
-that host adapter, not the adapter itself. No runnable agent, controller,
-`pathctl`, custom resource deployment, live GPU collection, or live Kubernetes
-validation is available yet.
+that host adapter, not the adapter itself. `path-agent` runs only in offline
+fixture mode. No live agent, controller, `pathctl`, custom resource
+deployment, live GPU collection, or live Kubernetes validation is available
+yet.
 
 Active GPU work, reset, drain, and driver management remain the responsibility
 of operators such as GPU Operator.

@@ -6,8 +6,10 @@ the edge of the application.
 
 ## Implemented core
 
-The current code is a library-level domain core. It has no running agent,
-controller, CLI, Kubernetes adapter, or custom resources.
+The current code is a library-level domain core plus an offline host
+collector: `internal/agent`, run by `path-agent --fixture-root`, turns a fixture
+sysfs tree and canned NVIDIA inventory into a JSON snapshot artifact. It has no
+live agent, controller, `pathctl`, Kubernetes adapter, or custom resources.
 
 Arrows point from a shared building block to the package that consumes it.
 
