@@ -56,7 +56,11 @@ func gfxGo(t *testing.T, env []string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// TestGFX003_NoNewRequirements: go.mod keeps the module line and no require.
+// TestGFX003_NoNewRequirements: go.mod keeps the module line, and (GFX-003
+// v1.1) this feature adds no dependency of its own: whatever require
+// directives later ratified contracts added (GKA-190) are allowed, but the
+// dependency closure of cmd/pathctl, with CGO_ENABLED=0 and =1, holds no
+// package of an external module (standard library and this module only).
 func TestGFX003_NoNewRequirements(t *testing.T) {
 	t.Parallel()
 	mod, err := os.ReadFile(filepath.Join(gfoRepoRoot(t), "go.mod"))
@@ -66,9 +70,23 @@ func TestGFX003_NoNewRequirements(t *testing.T) {
 	if !strings.HasPrefix(string(mod), "module "+gfoModule+"\n") {
 		t.Errorf("GFX-003: go.mod module line changed")
 	}
-	for _, line := range strings.Split(string(mod), "\n") {
-		if l := strings.TrimSpace(line); l == "require" || strings.HasPrefix(l, "require ") || strings.HasPrefix(l, "require(") {
-			t.Errorf("GFX-003/GFX-100 (c): go.mod has a require directive: %q", l)
+	for _, cgo := range []string{"0", "1"} {
+		out, err := gfxGo(t, []string{"CGO_ENABLED=" + cgo}, "list", "-deps", "-f", "{{.ImportPath}}|{{.Standard}}|{{if .Module}}{{.Module.Path}}{{end}}", "./cmd/pathctl")
+		if err != nil {
+			t.Fatalf("GFX-003 v1.1: go list -deps ./cmd/pathctl (CGO_ENABLED=%s): %v\n%s", cgo, err, out)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			parts := strings.Split(line, "|")
+			if len(parts) != 3 {
+				t.Fatalf("GFX-003 v1.1: unexpected go list line %q", line)
+			}
+			path, std, module := parts[0], parts[1], parts[2]
+			if std == "true" {
+				continue
+			}
+			if module != gfoModule || (path != gfoModule && !strings.HasPrefix(path, gfoModule+"/")) {
+				t.Errorf("GFX-003/GFX-100 (c) v1.1 CGO_ENABLED=%s: the pathctl closure holds %s of module %q (only the standard library and %s are allowed)", cgo, path, module, gfoModule)
+			}
 		}
 	}
 }
@@ -228,7 +246,7 @@ func TestGFX100_BuildAndDependencies(t *testing.T) {
 				continue
 			}
 			if path != gfoModule && !strings.HasPrefix(path, gfoModule+"/") {
-				t.Errorf("GFX-100 (b) CGO_ENABLED=%s: non-standard, non-module dependency %s", cgo, path)
+				t.Errorf("GFX-100 (b)/(c) v1.1 CGO_ENABLED=%s: non-standard, non-module dependency %s", cgo, path)
 			}
 			if cgoFiles != "0" {
 				t.Errorf("GFX-100 (b) CGO_ENABLED=%s: %s has %s cgo files", cgo, path, cgoFiles)
@@ -260,16 +278,51 @@ func TestGFX100_BuildAndDependencies(t *testing.T) {
 			if tg.pkg == "./cmd/pathctl" {
 				args = append(args, "-o", filepath.Join(t.TempDir(), "pathctl"))
 			}
-			args = append(args, tg.pkg)
+			pkgs := []string{tg.pkg}
+			if tg.goos == "plan9" && tg.goarch == "amd64" && tg.pkg == "./..." {
+				pkgs = gfxPlan9Packages(t)
+			}
+			args = append(args, pkgs...)
 			if out, err := gfxGo(t, []string{"CGO_ENABLED=0", "GOOS=" + tg.goos, "GOARCH=" + tg.goarch}, args...); err != nil {
 				head := out
 				if len(head) > 1500 {
 					head = head[:1500] + "..."
 				}
-				t.Errorf("GFX-100 (a)/(e): CGO_ENABLED=0 GOOS=%s GOARCH=%s go build %s failed: %v\n%s", tg.goos, tg.goarch, tg.pkg, err, head)
+				t.Errorf("GFX-100 (a)/(e) v1.1: CGO_ENABLED=0 GOOS=%s GOARCH=%s go build %s failed: %v\n%s", tg.goos, tg.goarch, strings.Join(pkgs, " "), err, head)
 			}
 		})
 	}
+}
+
+// gfxPlan9Excluded lists the package trees GFX-100 (e) v1.1 leaves out of the
+// plan9/amd64 build (GKA-196): the Kubernetes packages, the controller binary
+// and the test package importing them. Whether they really fail on plan9 is not
+// asserted here.
+var gfxPlan9Excluded = []string{"/internal/kubernetes", "/cmd/path-controller", "/tests/kubeapi"}
+
+// gfxPlan9Packages returns every package with non-test Go files (what
+// `go build ./...` would build) except gfxPlan9Excluded, so plan9/amd64 still
+// builds everything else.
+func gfxPlan9Packages(t *testing.T) []string {
+	t.Helper()
+	out, err := gfxGo(t, []string{"CGO_ENABLED=0"}, "list", "-f", "{{if or .GoFiles .CgoFiles}}{{.ImportPath}}{{end}}", "./...")
+	if err != nil {
+		t.Fatalf("GFX-100 (e) v1.1: go list ./...: %v\n%s", err, out)
+	}
+	var pkgs []string
+next:
+	for _, p := range strings.Fields(out) {
+		for _, ex := range gfxPlan9Excluded {
+			if p == gfoModule+ex || strings.HasPrefix(p, gfoModule+ex+"/") {
+				continue next
+			}
+		}
+		pkgs = append(pkgs, p)
+	}
+	if len(pkgs) == 0 {
+		t.Fatalf("GFX-100 (e) v1.1: no package is left for plan9/amd64")
+	}
+	return pkgs
 }
 
 // TestGFX101_VerificationSeam: the binary contract is the only surface; the

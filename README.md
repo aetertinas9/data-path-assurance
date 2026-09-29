@@ -7,9 +7,10 @@ decisions can be traced back to observations.
 
 ## Current capabilities
 
-The repository currently provides domain libraries and two offline tools, a
-fixture collector and an explain command, rather than an installable service.
-The implemented code includes:
+The repository currently provides domain libraries, two offline tools (a
+fixture collector and an explain command), and the first Kubernetes
+control-plane pieces (custom resource types and a status controller), rather
+than an installable service. The implemented code includes:
 
 - shared domain types in `pkg/model`;
 - typed identity handling in `internal/identity`;
@@ -26,7 +27,12 @@ The implemented code includes:
   fixture mode (see below); and
 - an offline evaluation and explain flow: artifact and fleet file readers in
   `internal/offline`, the evaluation in `internal/app`, and the command-line
-  adapter in `internal/cli/explain`, run by `pathctl explain` (see below).
+  adapter in `internal/cli/explain`, run by `pathctl explain` (see below);
+- Kubernetes custom resource types `GPUFleet`, `GPUDevice`, and
+  `NodePathState` in `internal/kubernetes/api/v1alpha1`, with generated CRD
+  manifests in `deploy/crds/`; and
+- a status controller in `internal/kubernetes/controller`, run by
+  `path-controller`, that publishes status for those resources (see below).
 
 PCIe evaluation is passive: it compares negotiated and expected link width
 from supplied evidence and produces deterministic results. The fleet package
@@ -231,16 +237,71 @@ allocation or fence data, so maintenance and retirement can be shown as
 pending but never as complete. Inputs near the artifact size bounds (tens of
 thousands of observations in one frame) can take a minute or more to evaluate.
 
+## Kubernetes API and status controller
+
+`deploy/crds/` holds three cluster-scoped `v1alpha1` custom resource definitions
+in the `infrastructure.data-path-assurance.io` group, generated with a pinned
+controller-gen from the Go types in `internal/kubernetes/api/v1alpha1`:
+
+- `GPUFleet` selects nodes with `nodeSelector` and carries the coverage policy
+  (`requiredCoverage`, `freshnessSeconds`, `readyForSeconds`) and a `mode`
+  (`Audit` by default, or `Enforce` with a required `canarySelector`);
+- `GPUDevice` records the operator's intent for one GPU: an immutable node
+  reference and inventory claim, the fleet it belongs to, `desiredState`
+  (`InService`, `Maintenance`, or `Retired`), and a request ID; and
+- `NodePathState` is created and owned by the controller, one per selected
+  node, with a Node owner reference.
+
+Structural schema and CEL rules reject invalid objects at admission without a
+webhook: immutable references and claims, `Retired` as a terminal state, a new
+request ID for every desired-state change, non-empty selectors, and bounded
+lists and strings. Status fields are bounded, and values that are not known
+yet are omitted instead of guessed.
+
+`path-controller` runs one active controller under a `coordination.k8s.io`
+Lease. It watches the three resources and Nodes, re-evaluates at least every
+30 seconds, and writes each resource's status through the status subresource
+with a dedicated field manager, skipping writes when nothing changed. For every
+selected node it passes the fleet policy and the device intents to an
+evaluation port in `internal/app`. Overlapping fleets make a node `Conflict`, a
+fleet selecting more than 1024 nodes is not evaluated, duplicate inventory
+claims make the devices `IdentityConflict`, and a fleet with an invalid
+selector holds its nodes' state instead of deleting it. For nodes whose fleets
+are all in `Audit` mode it also publishes a `DataPathGPUFleetReady` Node
+condition with server-side apply, leaving every other condition, taint, and
+label untouched. It never writes taints, finalizers, or Pods; an `Enforce`
+fleet is reported with `gate_not_implemented` in its condition messages.
+
+There is no live evidence source yet. The controller wires an evaluation port
+that reports no observation, so every device stays `Unknown` with reason
+`Validating` and the message token `no_observation` until authenticated live
+ingest is implemented. This is a truthful cold start, not a qualification
+result.
+
+```sh
+make envtest-assets     # download kube-apiserver and etcd 1.35.0 into build/envtest (network)
+make test-envtest       # run tests/kubeapi against a real API server, with -race
+make generate           # regenerate deepcopy code and deploy/crds with controller-gen v0.20.1
+make verify-generated   # fail if the checked-in generated files are stale
+CGO_ENABLED=0 go build -o bin/path-controller ./cmd/path-controller
+bin/path-controller --kubeconfig <file> --cluster-id <id> --leader-election-namespace <namespace>
+```
+
+`make test` includes the `tests/kubeapi` suite whenever the envtest binaries are
+present and skips it with a log line otherwise. The controller opens no network
+listener and never logs kubeconfig contents or API response bodies.
+
 ## Product direction
 
-The pure lifecycle evaluation layer is implemented, but its executable adapters
-are still future work. Planned host and Kubernetes adapters will collect and
-bind live identity and path evidence and expose `GPUFleet`, `GPUDevice`, and
-`NodePathState` resources. The native PCIe observer is a building block for
-that host adapter, not the adapter itself. `path-agent` runs only in offline
-fixture mode, and `pathctl` has only the offline explain path. No live agent,
-controller, controller explain API, custom resource deployment, live GPU
-collection, or live Kubernetes validation is available yet.
+The pure lifecycle evaluation layer, the Kubernetes custom resources, and the
+status controller are implemented; live evidence is still future work. Planned
+host and transport adapters will collect and bind live identity and path
+evidence and feed the controller's evaluation port. The native PCIe observer is
+a building block for that host adapter, not the adapter itself. `path-agent`
+runs only in offline fixture mode, `pathctl` has only the offline explain path,
+and `path-controller` publishes only cold-start status. No live agent, live
+evidence ingest, controller explain API, scheduling gate, deployment manifests,
+live GPU collection, or validation on a real cluster is available yet.
 
 Active GPU work, reset, drain, and driver management remain the responsibility
 of operators such as GPU Operator.

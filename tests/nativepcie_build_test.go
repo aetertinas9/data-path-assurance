@@ -507,9 +507,16 @@ func TestNPO063_NoCgoBuildSucceedsWithoutNativeArtifacts(t *testing.T) {
 	}
 }
 
+// npoPlan9Excluded lists the package trees NPO-060's third GIVEN (v1.1, GKA-196)
+// leaves out of the plan9/amd64 build because k8s.io/apimachinery does not
+// support plan9: the Kubernetes packages, the controller binary and the test
+// package that imports them. Whether they really fail on plan9 is not asserted.
+var npoPlan9Excluded = []string{"/internal/kubernetes", "/cmd/path-controller", "/tests/kubeapi"}
+
 // NPO-060 / NPO-063: every other platform, and CGO_ENABLED=0 anywhere, must
 // build the whole repository through the unavailable stub without native
-// artifacts (fresh copy). Cross-compiles run in parallel as subtests.
+// artifacts (fresh copy); on plan9/amd64 (v1.1) every package builds except
+// npoPlan9Excluded. Cross-compiles run in parallel as subtests.
 func TestNPO060_UnavailableStubBuildsOnEveryTarget(t *testing.T) {
 	repo := npoFreshCopyWithoutArtifacts(t)
 	env := npoIsolatedEnv(t)
@@ -522,7 +529,30 @@ func TestNPO060_UnavailableStubBuildsOnEveryTarget(t *testing.T) {
 		name := tg.goos + "/" + tg.goarch
 		t.Run(strings.ReplaceAll(name, "/", "_"), func(t *testing.T) {
 			t.Parallel()
-			cmd := exec.Command("go", "build", "./...")
+			pkgs := []string{"./..."}
+			if tg.goos == "plan9" && tg.goarch == "amd64" {
+				// Every package with non-test Go files (what ./... builds) minus the
+				// excluded trees; listed with the same CGO setting as the build.
+				listEnv := append(append([]string{}, env...), "CGO_ENABLED=0")
+				out, err := npoRun(repo, listEnv, "go", "list", "-f", "{{if or .GoFiles .CgoFiles}}{{.ImportPath}}{{end}}", "./...")
+				if err != nil {
+					t.Fatalf("NPO-060 v1.1: go list ./... failed: %v\n%s", err, out)
+				}
+				pkgs = nil
+			next:
+				for _, p := range strings.Fields(out) {
+					for _, ex := range npoPlan9Excluded {
+						if p == gfoModule+ex || strings.HasPrefix(p, gfoModule+ex+"/") {
+							continue next
+						}
+					}
+					pkgs = append(pkgs, p)
+				}
+				if len(pkgs) == 0 {
+					t.Fatalf("NPO-060 v1.1: no package is left for plan9/amd64")
+				}
+			}
+			cmd := exec.Command("go", append([]string{"build"}, pkgs...)...)
 			cmd.Dir = repo
 			cmd.Env = append(append([]string{}, env...), "CGO_ENABLED=0", "GOOS="+tg.goos, "GOARCH="+tg.goarch)
 			out, err := cmd.CombinedOutput()
@@ -531,7 +561,7 @@ func TestNPO060_UnavailableStubBuildsOnEveryTarget(t *testing.T) {
 				if len(head) > 1200 {
 					head = head[:1200] + "\n..."
 				}
-				t.Errorf("NPO-060/NPO-063: CGO_ENABLED=0 GOOS=%s GOARCH=%s go build ./... failed (%v):\n%s", tg.goos, tg.goarch, err, head)
+				t.Errorf("NPO-060/NPO-063 v1.1: CGO_ENABLED=0 GOOS=%s GOARCH=%s go build %s failed (%v):\n%s", tg.goos, tg.goarch, strings.Join(pkgs, " "), err, head)
 			}
 		})
 	}

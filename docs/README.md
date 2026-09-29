@@ -8,4 +8,4 @@ data-path-assurance.
 - [Architecture](architecture.md) — implemented core and fleet evaluation,
   target adapter flow, and operational boundaries
 - [Getting started](getting-started.md) — source checks, offline collection and
-  explain, and the current deployment limitation
+  explain, Kubernetes API tests, and the current deployment limitation

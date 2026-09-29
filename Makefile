@@ -90,6 +90,7 @@ native-record = printf '%s\n' '$(2)' > '$(1).digest'
 
 .PHONY: all build vet fmt test arch-check
 .PHONY: native native-asan native-example native-test native-test-sanitize clean-native native-force
+.PHONY: generate verify-generated envtest-assets test-envtest
 
 all: build vet arch-check
 
@@ -102,8 +103,20 @@ build: native
 vet: native
 	go vet ./...
 
+# An existing KUBEBUILDER_ASSETS (even an empty one) is respected. When it is
+# not set and the directory that `make envtest-assets` prepares exists, it is
+# exported so the envtest tests run (a directory without working binaries then
+# fails those tests instead of skipping them); otherwise the variable stays
+# unset and those tests skip with an explicit log line. Packages run one at a
+# time (-p 1): the CPU-heavy cross-build tests would otherwise starve the
+# envtest tests of the wait limits GKA-177 sets.
 test: native
-	go test ./...
+	@if [ -z "$${KUBEBUILDER_ASSETS+x}" ] && [ -d '$(ENVTEST_ASSETS)' ]; then \
+		KUBEBUILDER_ASSETS='$(CURDIR)/$(ENVTEST_ASSETS)'; export KUBEBUILDER_ASSETS; \
+		echo "test: envtest assets: $$KUBEBUILDER_ASSETS"; \
+	fi; \
+	echo 'go test -p 1 -timeout 30m ./...'; \
+	go test -p 1 -timeout 30m ./...
 
 fmt:
 	gofmt -l .
@@ -196,6 +209,83 @@ clean-native:
 	rm -f $(NATIVE_STAMP) $(NATIVE_STAMP).tmp
 	@rmdir build/native build/native-tests 2>/dev/null || true
 
+# --- Kubernetes API: generated code and manifests, envtest ------------------
+#
+# The CRD Go types under internal/kubernetes/api carry the markers that
+# controller-gen turns into zz_generated.deepcopy.go and the CRD manifests in
+# deploy/crds. controller-gen is run through `go run ...@version` at a pinned
+# version; it is neither a go.mod requirement nor a `tool` directive. The
+# generated files are checked in and never edited by hand.
+
+CONTROLLER_GEN_VERSION := v0.20.1
+CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
+
+K8S_API_DIR := internal/kubernetes/api/v1alpha1
+K8S_API_PKGS := ./internal/kubernetes/api/...
+K8S_API_DEEPCOPY := zz_generated.deepcopy.go
+CRD_DIR := deploy/crds
+
+# envtest runs a real kube-apiserver and etcd. The assets live in
+# build/envtest/k8s/<version>-<GOOS>-<GOARCH> (build/ is git-ignored); the
+# host names come from `go env` like the native target names above.
+ENVTEST_K8S_VERSION := 1.35.0
+SETUP_ENVTEST_VERSION := v0.0.0-20260305142021-f9589b9f2b9d
+ENVTEST_BIN_DIR := build/envtest
+ENVTEST_ASSETS := $(ENVTEST_BIN_DIR)/k8s/$(ENVTEST_K8S_VERSION)-$(NATIVE_GOOS)-$(NATIVE_GOARCH)
+
+# Regenerates the deep copy functions and the CRD manifests in place.
+generate:
+	$(CONTROLLER_GEN) object paths=$(K8S_API_PKGS)
+	$(CONTROLLER_GEN) crd:crdVersions=v1 paths=$(K8S_API_PKGS) output:crd:dir=$(CRD_DIR)
+
+# Regenerates into a scratch directory in the system temporary directory
+# ($TMPDIR, else /tmp) and compares it byte for byte with the checked-in
+# files: zz_generated.deepcopy.go and exactly the manifests in deploy/crds. It
+# never writes into the repository tree, needs no git, and tells a failed
+# controller-gen run apart from drift by its message.
+verify-generated:
+	@set -u; \
+	work="$$(mktemp -d "$${TMPDIR:-/tmp}/dpa-verify-generated.XXXXXX")" || { echo "verify-generated: cannot create a scratch directory" >&2; exit 1; }; \
+	trap 'rm -rf "$$work"' EXIT; \
+	trap 'exit 1' HUP INT TERM; \
+	mkdir -p "$$work/deepcopy" "$$work/crds" || exit 1; \
+	$(CONTROLLER_GEN) object paths=$(K8S_API_PKGS) output:object:dir="$$work/deepcopy" \
+		|| { echo "verify-generated: controller-gen failed (generation error, not drift)" >&2; exit 1; }; \
+	$(CONTROLLER_GEN) crd:crdVersions=v1 paths=$(K8S_API_PKGS) output:crd:dir="$$work/crds" \
+		|| { echo "verify-generated: controller-gen failed (generation error, not drift)" >&2; exit 1; }; \
+	status=0; \
+	if ! cmp -s "$$work/deepcopy/$(K8S_API_DEEPCOPY)" '$(K8S_API_DIR)/$(K8S_API_DEEPCOPY)'; then \
+		echo "verify-generated: DRIFT $(K8S_API_DIR)/$(K8S_API_DEEPCOPY) differs from the generated output" >&2; \
+		status=1; \
+	fi; \
+	if ! diff -rq "$$work/crds" '$(CRD_DIR)' >"$$work/crds.diff" 2>&1; then \
+		echo "verify-generated: DRIFT $(CRD_DIR) differs from the generated output:" >&2; \
+		sed 's/^/      /' "$$work/crds.diff" >&2; \
+		status=1; \
+	fi; \
+	if [ $$status -eq 0 ]; then \
+		echo "verify-generated: OK"; \
+	else \
+		echo "verify-generated: run 'make generate' and review the diff" >&2; \
+	fi; \
+	exit $$status
+
+# Downloads kube-apiserver and etcd for envtest (network access needed). No
+# other target fetches them.
+envtest-assets: | $(NATIVE_BUILD_IGNORE)
+	go run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_BIN_DIR) -p path
+
+# Runs only the envtest tests, and fails (instead of skipping) when the assets
+# are not prepared.
+test-envtest:
+	@if [ ! -x '$(ENVTEST_ASSETS)/kube-apiserver' ] || [ ! -x '$(ENVTEST_ASSETS)/etcd' ]; then \
+		echo "test-envtest: kube-apiserver and etcd not found in $(ENVTEST_ASSETS); run 'make envtest-assets'" >&2; \
+		exit 1; \
+	fi; \
+	echo "test-envtest: envtest assets: $(CURDIR)/$(ENVTEST_ASSETS)"; \
+	echo 'go test -race -count=1 -timeout 30m ./tests/kubeapi/...'; \
+	KUBEBUILDER_ASSETS='$(CURDIR)/$(ENVTEST_ASSETS)' go test -race -count=1 -timeout 30m ./tests/kubeapi/...
+
 # arch-check enforces the dependency direction of the domain core.
 #
 # It walks the transitive dependencies of every domain core package that
@@ -203,6 +293,12 @@ clean-native:
 # separately checks that pkg/model depends on nothing but the standard library,
 # and that no domain core package uses cgo itself. Packages that do not exist
 # yet are simply absent from `go list ./...` and are never a reason to fail.
+# It also keeps Kubernetes out of the other binaries: cmd/pathctl and
+# cmd/path-agent must not reach k8s.io or sigs.k8s.io at all, and outside
+# internal/kubernetes (and the tests) no package may import them directly.
+# cmd/path-controller must not reach the native PCIe adapter (nor runtime/cgo
+# when built without cgo), and the controller package must not import the agent,
+# offline, CLI or native adapters.
 #
 # arch-check needs no native artifact: `go list` resolves imports and CgoFiles
 # without linking, so it must not depend on the native build (or on the
@@ -248,6 +344,44 @@ arch-check:
 			echo "arch-check: FAIL $$pkg reaches dependency outside model/evidence: $$dep"; \
 		done; \
 	done; \
+	for cmd in cmd/pathctl cmd/path-agent; do \
+		[ -d "$$cmd" ] || continue; \
+		deps="$$(go list -deps -f '{{.ImportPath}}' "./$$cmd")" || { echo "arch-check: go list -deps ./$$cmd failed" >&2; exit 1; }; \
+		k8sdeps="$$(printf '%s\n' "$$deps" | grep -E '^(sigs\.k8s\.io|k8s\.io)/' || true)"; \
+		if [ -n "$$k8sdeps" ]; then \
+			status=1; \
+			echo "arch-check: FAIL $$cmd reaches Kubernetes packages:"; \
+			printf '%s\n' "$$k8sdeps" | sed 's/^/      /'; \
+		fi; \
+	done; \
+	if [ -d cmd/path-controller ]; then \
+		for cgo in 0 1; do \
+			deps="$$(CGO_ENABLED=$$cgo go list -deps -f '{{.ImportPath}}' ./cmd/path-controller)" || { echo "arch-check: go list -deps ./cmd/path-controller failed" >&2; exit 1; }; \
+			pattern='(^|/)internal/nativepcie$$'; \
+			if [ "$$cgo" = 0 ]; then pattern='(^|/)internal/nativepcie$$|^runtime/cgo$$'; fi; \
+			native="$$(printf '%s\n' "$$deps" | grep -E "$$pattern" || true)"; \
+			if [ -n "$$native" ]; then \
+				status=1; \
+				echo "arch-check: FAIL cmd/path-controller (CGO_ENABLED=$$cgo) reaches native code:"; \
+				printf '%s\n' "$$native" | sed 's/^/      /'; \
+			fi; \
+		done; \
+	fi; \
+	if printf '%s\n' "$$all_packages" | grep -qx "$$module/internal/kubernetes/controller"; then \
+		ctrl_imports="$$(go list -f '{{join .Imports "\n"}}' ./internal/kubernetes/controller | grep -E "^$$module/(internal/(agent|offline|cli|nativepcie)|cmd)(/|$$)" || true)"; \
+		if [ -n "$$ctrl_imports" ]; then \
+			status=1; \
+			echo "arch-check: FAIL internal/kubernetes/controller imports adapters it must not know:"; \
+			printf '%s\n' "$$ctrl_imports" | sed 's/^/      /'; \
+		fi; \
+	fi; \
+	imports="$$(go list -f '{{.ImportPath}} {{join .Imports " "}}' ./...)" || { echo "arch-check: go list ./... failed" >&2; exit 1; }; \
+	offenders="$$(printf '%s\n' "$$imports" | awk -v m="$$module" '$$1 == m"/internal/kubernetes" || index($$1, m"/internal/kubernetes/") == 1 || $$1 == m"/tests" || index($$1, m"/tests/") == 1 { next } { for (i = 2; i <= NF; i++) if ($$i ~ /^(sigs\.k8s\.io|k8s\.io)\//) print "      " $$1 " imports " $$i }')"; \
+	if [ -n "$$offenders" ]; then \
+		status=1; \
+		echo "arch-check: FAIL packages outside internal/kubernetes import Kubernetes packages directly:"; \
+		printf '%s\n' "$$offenders"; \
+	fi; \
 	if [ $$status -eq 0 ]; then \
 		echo "arch-check: OK"; \
 	fi; \

@@ -1,15 +1,19 @@
 # Getting started
 
 data-path-assurance currently supports development and validation of its Go
-domain libraries and an offline fixture mode of `path-agent`. It does not yet
-provide a live agent, controller, `pathctl`
-binary, Kubernetes custom resources, or an installable deployment.
+domain libraries, an offline fixture mode of `path-agent`, offline
+`pathctl explain`, and Kubernetes custom resources with a status controller
+tested against a local API server. It does not yet provide a live agent, live
+evidence ingest, or an installable deployment.
 
 ## Prerequisites
 
 - Go 1.26
 - `make`
 - a C11 compiler (`cc`) and `ar`, for the native PCIe observer library
+- network access once, to download the envtest API server binaries
+  (`make envtest-assets`) and the pinned controller-gen used by
+  `make generate` and `make verify-generated`
 
 The module path is `github.com/aetertinas9/data-path-assurance`.
 
@@ -28,7 +32,10 @@ gofmt -l .
 runs `go vet`, and checks domain-core dependency boundaries, including the
 boundary around `internal/fleet` and the rule that no domain-core package
 reaches `internal/nativepcie` or cgo. The `test` target runs the Go test suite
-after the same native preparation. The race check is separate, and
+(`go test -p 1 ./...`) after the same native preparation; when
+`build/envtest/k8s/1.35.0-<os>-<arch>` exists it also runs the Kubernetes API
+tests in `tests/kubeapi` against a real API server, and otherwise skips them
+with a log line. The race check is separate, and
 `gofmt -l .` lists files whose formatting differs from `gofmt` output; no
 output means all checked Go files are formatted.
 
@@ -95,11 +102,35 @@ There is no live runtime or cluster installation procedure yet. In
 particular, do not expect a live agent, a controller, or Kubernetes resources
 to be present in the current source tree.
 
+## Kubernetes API tests and the status controller
+
+The custom resource tests start a local kube-apiserver and etcd (envtest):
+
+```sh
+make envtest-assets   # once: kube-apiserver and etcd 1.35.0 into build/envtest
+make test-envtest     # tests/kubeapi with -race
+make verify-generated # checked-in deepcopy code and CRDs match controller-gen v0.20.1
+```
+
+To try the controller against a disposable test cluster, apply the checked-in
+definitions and start it with a kubeconfig for that cluster:
+
+```sh
+kubectl apply -f deploy/crds/
+CGO_ENABLED=0 go build -o bin/path-controller ./cmd/path-controller
+bin/path-controller --kubeconfig <file> --cluster-id <id> --leader-election-namespace <namespace>
+```
+
+Without live evidence the controller publishes cold-start status only: devices
+stay `Unknown` with the `no_observation` message token. It writes no taints or
+finalizers.
+
 ## What comes next
 
-Offline sysfs and NVIDIA inventory fixture collection and the offline
-evaluation and explain flow are in place. The next milestones add Kubernetes
-APIs and transport, followed by an Audit deployment.
+Offline sysfs and NVIDIA inventory fixture collection, the offline evaluation
+and explain flow, and the Kubernetes custom resources with a status controller
+are in place. The next milestones add authenticated live ingest and allocation
+evidence, the controller explain API, and then an Audit deployment.
 
 Those executable capabilities are future targets. They should not be treated
 as available for deployment or as validated against real GPU hardware. See

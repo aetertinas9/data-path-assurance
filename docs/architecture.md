@@ -6,11 +6,14 @@ the edge of the application.
 
 ## Implemented core
 
-The current code is a library-level domain core plus two offline tools.
-`internal/agent`, run by `path-agent --fixture-root`, turns a fixture sysfs tree
-and canned NVIDIA inventory into a JSON snapshot artifact. `pathctl explain`
-evaluates that artifact offline (see [Offline explain](#offline-explain)). There
-is no live agent, controller, Kubernetes adapter, or custom resources.
+The current code is a library-level domain core, two offline tools, and a
+Kubernetes status controller. `internal/agent`, run by
+`path-agent --fixture-root`, turns a fixture sysfs tree and canned NVIDIA
+inventory into a JSON snapshot artifact. `pathctl explain` evaluates that
+artifact offline (see [Offline explain](#offline-explain)). `path-controller`
+publishes status for the `GPUFleet`, `GPUDevice`, and `NodePathState` custom
+resources (see [Kubernetes API and status controller](#kubernetes-api-and-status-controller)).
+There is no live agent and no live evidence ingest.
 
 Arrows point from a shared building block to the package that consumes it.
 
@@ -112,10 +115,43 @@ formats or I/O, so the future controller explain API can reuse it.
 the explanation. The command depends on neither `internal/agent` nor the native
 PCIe observer and builds with `CGO_ENABLED=0`.
 
+### Kubernetes API and status controller
+
+`cmd/path-controller` wires three parts. Kubernetes types and clients stay in
+`internal/kubernetes`; the evaluation port lives in `internal/app`, which remains
+part of the domain core checked by `make arch-check`.
+
+```mermaid
+flowchart LR
+    K["GPUFleet · GPUDevice · Node<br/>(watched objects)"]
+    C["internal/kubernetes/controller<br/>selection, scopes, projection,<br/>leader election, status writes"]
+    P["internal/app NodeAssessor<br/>LiveAssessor"]
+    S["LiveBundleSource<br/>(no observation today)"]
+    F["internal/fleet<br/>EvaluateDevice · AggregateNode"]
+    O["CRD status · NodePathState ·<br/>Audit Node condition"]
+
+    K --> C
+    C --> P
+    S --> P
+    F --> P
+    P --> C
+    C --> O
+```
+
+The controller reads its inputs from informer caches and runs one serial pass at
+a time: it classifies every fleet, node, and device scope, calls the assessor
+once per evaluable node, and writes only statuses that changed. A missing
+observation is represented by the absence of a decision, never by a synthesized
+one, so a cold start renders `Unknown` from the intent alone. Previous decisions
+are kept in memory only and are not restored from status after a restart or a
+leader change. Custom resource definitions are applied from the checked-in
+manifests; the controller never creates or changes them.
+
 ## Target executable integration
 
 The following flow describes the intended integration around the implemented
-domain libraries. Its adapters, control plane, and Kubernetes resources are not
+domain libraries. The Kubernetes resources and the status controller exist; the
+live source adapters, authenticated ingest, and the scheduling gate are not
 implemented yet.
 
 ```mermaid
@@ -153,6 +189,7 @@ those actions.
 The fleet library evaluates supplied identity, evidence, lifecycle intent, and
 allocation state. It does not collect those inputs from a real host or cluster;
 the offline explain path evaluates recorded fixture snapshots only.
-Collectors, transport, Kubernetes APIs, and deployment remain future work, and
-the system has not been validated on real GPUs or made available for
-installation.
+Live collectors, transport, the controller explain API, the scheduling gate,
+and deployment manifests remain future work. The Kubernetes resources and the
+controller are tested against a local API server only; the system has not been
+validated on a real cluster or real GPUs or made available for installation.

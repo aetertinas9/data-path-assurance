@@ -117,8 +117,10 @@ func TestGFO101a_EscapeFixtures(t *testing.T) {
 
 // GFO-002/GFO-003/GFO-102: path-agent builds with CGO_ENABLED=0 for the
 // three targets; its dependencies (CGO 0 and 1) are standard library or this
-// module, never internal/nativepcie, with no cgo files; go.mod has no
-// require; make arch-check passes.
+// module, never internal/nativepcie, with no cgo files; (v1.3) this feature
+// adds no dependency of its own - require directives added by later ratified
+// contracts (GKA-190) are allowed, but the cmd/path-agent closure holds no
+// package of an external module; make arch-check passes.
 func TestGFO102_GFO003_BuildAndDependencies(t *testing.T) {
 	t.Parallel()
 	root := gfoRepoRoot(t)
@@ -164,9 +166,22 @@ func TestGFO102_GFO003_BuildAndDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(string(mod), "\n") {
-		if l := strings.TrimSpace(line); l == "require" || strings.HasPrefix(l, "require ") || strings.HasPrefix(l, "require(") {
-			t.Errorf("GFO-003/GFO-102: go.mod has a require directive: %q", l)
+	// v1.3: the require-absence check became a closure check on cmd/path-agent
+	// that also names the owning module of every non-standard package.
+	for _, cgo := range []string{"0", "1"} {
+		out := run(t, []string{"CGO_ENABLED=" + cgo}, "go", "list", "-deps", "-f", "{{.ImportPath}}|{{.Standard}}|{{if .Module}}{{.Module.Path}}{{end}}", "./cmd/path-agent")
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			parts := strings.Split(line, "|")
+			if len(parts) != 3 {
+				t.Fatalf("GFO-003/GFO-102 v1.3: unexpected go list line %q", line)
+			}
+			path, std, module := parts[0], parts[1], parts[2]
+			if std == "true" {
+				continue
+			}
+			if module != gfoModule || (path != gfoModule && !strings.HasPrefix(path, gfoModule+"/")) {
+				t.Errorf("GFO-003/GFO-102 v1.3 CGO_ENABLED=%s: the path-agent closure holds %s of module %q (only the standard library and %s are allowed)", cgo, path, module, gfoModule)
+			}
 		}
 	}
 	if !strings.HasPrefix(string(mod), "module "+gfoModule+"\n") {

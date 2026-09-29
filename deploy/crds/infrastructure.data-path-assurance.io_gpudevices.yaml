@@ -1,0 +1,663 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: gpudevices.infrastructure.data-path-assurance.io
+spec:
+  group: infrastructure.data-path-assurance.io
+  names:
+    kind: GPUDevice
+    listKind: GPUDeviceList
+    plural: gpudevices
+    singular: gpudevice
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.nodeRef.name
+      name: NODE
+      type: string
+    - jsonPath: .spec.desiredState
+      name: DESIRED
+      type: string
+    - jsonPath: .status.lifecyclePhase
+      name: PHASE
+      type: string
+    - jsonPath: .status.qualification
+      name: QUALIFIED
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          GPUDevice is the operator's registration of one GPU of a fleet together with
+          the controller's observed result for it.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GPUDeviceSpec is the operator's intent for one GPU.
+            properties:
+              desiredState:
+                description: desiredState is the lifecycle state the operator asks
+                  for.
+                enum:
+                - InService
+                - Maintenance
+                - Retired
+                maxLength: 256
+                minLength: 1
+                type: string
+              fleetRef:
+                description: fleetRef is the GPUFleet the device belongs to.
+                properties:
+                  name:
+                    description: name is the object name.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: uid is the object UID.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                - uid
+                type: object
+              inventoryClaim:
+                description: inventoryClaim is the claimed hardware identity. It is
+                  immutable.
+                properties:
+                  evidenceID:
+                    description: evidenceID identifies the inventory record backing
+                      the claim.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  serial:
+                    description: serial is the GPU serial number.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  source:
+                    description: source names where the claim comes from.
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                  uuid:
+                    description: uuid is the GPU UUID.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  vendor:
+                    description: vendor is the GPU vendor.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - evidenceID
+                - source
+                - vendor
+                type: object
+                x-kubernetes-validations:
+                - message: inventoryClaim requires uuid or serial
+                  rule: has(self.uuid) || has(self.serial)
+              nodeRef:
+                description: nodeRef is the Node the GPU is installed in. It is immutable.
+                properties:
+                  name:
+                    description: name is the object name.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: uid is the object UID.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                - uid
+                type: object
+              request:
+                description: request identifies the operator request behind desiredState.
+                properties:
+                  id:
+                    description: id identifies the request.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  reason:
+                    description: reason is the free-text reason of the request.
+                    maxLength: 512
+                    type: string
+                required:
+                - id
+                - reason
+                type: object
+            required:
+            - desiredState
+            - fleetRef
+            - inventoryClaim
+            - nodeRef
+            - request
+            type: object
+            x-kubernetes-validations:
+            - message: spec.nodeRef is immutable
+              rule: self.nodeRef == oldSelf.nodeRef
+            - message: spec.inventoryClaim is immutable
+              rule: self.inventoryClaim == oldSelf.inventoryClaim
+            - message: a Retired GPUDevice cannot leave Retired; register a new GPUDevice
+              rule: oldSelf.desiredState != 'Retired' || self.desiredState == 'Retired'
+            - message: changing desiredState requires a new request.id
+              rule: self.desiredState == oldSelf.desiredState || self.request.id !=
+                oldSelf.request.id
+          status:
+            description: GPUDeviceStatus is the observed state of one GPU.
+            properties:
+              actualBinding:
+                description: actualBinding is the observed binding of the claim.
+                properties:
+                  bdf:
+                    description: bdf is the PCI address of the GPU function.
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                  bootID:
+                    description: bootID is the boot ID of the Node during the observation.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  evidenceID:
+                    description: evidenceID identifies the evidence of the observation.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  expiresAt:
+                    description: expiresAt is when the observation stops being fresh.
+                    format: date-time
+                    type: string
+                  functionKey:
+                    description: functionKey is the stable key of the GPU function.
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                  nodeUID:
+                    description: nodeUID is the UID of the Node the GPU was observed
+                      on.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  observedAt:
+                    description: observedAt is when the binding was observed.
+                    format: date-time
+                    type: string
+                  reason:
+                    description: reason tells why the binding has this state.
+                    maxLength: 512
+                    minLength: 1
+                    type: string
+                  serial:
+                    description: serial is the observed GPU serial number.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  source:
+                    description: source is the evidence source of the observation.
+                    properties:
+                      name:
+                        description: name is the source name.
+                        maxLength: 256
+                        minLength: 1
+                        type: string
+                      type:
+                        description: type is the source type.
+                        maxLength: 256
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - type
+                    type: object
+                  state:
+                    description: state is the binding state.
+                    enum:
+                    - Bound
+                    - Unknown
+                    - Conflict
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                  uuid:
+                    description: uuid is the observed GPU UUID.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  vendor:
+                    description: vendor is the observed GPU vendor.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - reason
+                - state
+                type: object
+                x-kubernetes-validations:
+                - message: actualBinding.state Bound requires vendor, uuid, nodeUID,
+                    bootID, bdf, functionKey, source, evidenceID, observedAt and expiresAt
+                  rule: self.state != 'Bound' || (has(self.vendor) && has(self.uuid)
+                    && has(self.nodeUID) && has(self.bootID) && has(self.bdf) && has(self.functionKey)
+                    && has(self.source) && has(self.evidenceID) && has(self.observedAt)
+                    && has(self.expiresAt))
+              allocation:
+                description: allocation summarizes which workloads use the device.
+                properties:
+                  affectedWorkloads:
+                    description: affectedWorkloads are the workloads that use the
+                      device.
+                    items:
+                      description: AffectedWorkload is a workload container that uses
+                        a device.
+                      properties:
+                        container:
+                          description: container is the container name.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        createdAt:
+                          description: createdAt is when the workload was created.
+                          format: date-time
+                          type: string
+                        deletedAt:
+                          description: deletedAt is when the workload was deleted,
+                            if it was.
+                          format: date-time
+                          type: string
+                        name:
+                          description: name is the workload name.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        namespace:
+                          description: namespace is the workload namespace.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        uid:
+                          description: uid is the workload UID.
+                          maxLength: 128
+                          minLength: 1
+                          type: string
+                      required:
+                      - container
+                      - createdAt
+                      - name
+                      - namespace
+                      - uid
+                      type: object
+                    maxItems: 256
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - uid
+                    x-kubernetes-list-type: map
+                  evidenceRefs:
+                    description: evidenceRefs are the IDs of the evidence behind the
+                      allocation.
+                    items:
+                      maxLength: 128
+                      minLength: 1
+                      type: string
+                    maxItems: 8
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  expiresAt:
+                    description: expiresAt is when the observation stops being fresh.
+                    format: date-time
+                    type: string
+                  observedAt:
+                    description: observedAt is when the allocation was observed.
+                    format: date-time
+                    type: string
+                  profile:
+                    description: profile is the allocation profile of the observation.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  reason:
+                    description: reason tells why the allocation has this state.
+                    maxLength: 512
+                    minLength: 1
+                    type: string
+                  state:
+                    description: state is the allocation state.
+                    enum:
+                    - Empty
+                    - InUse
+                    - Unknown
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                required:
+                - affectedWorkloads
+                - evidenceRefs
+                - reason
+                - state
+                type: object
+                x-kubernetes-validations:
+                - message: allocation.state Empty or InUse requires profile, observedAt,
+                    expiresAt and evidenceRefs
+                  rule: self.state == 'Unknown' || (has(self.profile) && has(self.observedAt)
+                    && has(self.expiresAt) && size(self.evidenceRefs) > 0)
+              conditions:
+                description: conditions are the device conditions.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: conditions must have an allowed type and reason, an observedGeneration,
+                    and a message of 1 to 1024 characters
+                  rule: self.all(c, c.type in ['DeviceQualified', 'LifecycleReady',
+                    'EvidenceFresh', 'IdentityBound', 'AllocationKnown'] && c.reason
+                    in ['Ready', 'Validating', 'Degraded', 'CoverageMissing', 'EvidenceStale',
+                    'IdentityConflict', 'UIDMismatch', 'AllocationUnknown', 'FenceMissing',
+                    'Conflict', 'NoMatchingDevices', 'PartialSnapshot', 'BundleMismatch',
+                    'FutureObservation', 'UntrustedSource', 'UnadmittedSnapshot',
+                    'TargetCapacityExceeded', 'CleanupPending', 'CleanupStable', 'CleanupCompleted',
+                    'OwnershipConflict', 'InternalError'] && has(c.observedGeneration)
+                    && size(c.message) >= 1 && size(c.message) <= 1024)
+              coverage:
+                description: coverage is the state of every required coverage.
+                items:
+                  description: |-
+                    CoverageSummary is the state of one required coverage of a device. A Normal
+                    coverage carries its observation times and evidence.
+                  properties:
+                    evidenceRefs:
+                      description: evidenceRefs are the IDs of the evidence behind
+                        the coverage.
+                      items:
+                        maxLength: 128
+                        minLength: 1
+                        type: string
+                      maxItems: 16
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    expiresAt:
+                      description: expiresAt is when the observation stops being fresh.
+                      format: date-time
+                      type: string
+                    latestObservedAt:
+                      description: latestObservedAt is the latest observation time
+                        of the coverage.
+                      format: date-time
+                      type: string
+                    name:
+                      description: name is the name of the fleet requirement the coverage
+                        answers.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[A-Za-z0-9._-]+$
+                      type: string
+                    observedAt:
+                      description: observedAt is when the coverage was observed.
+                      format: date-time
+                      type: string
+                    pathKind:
+                      description: pathKind is the kind of physical path the coverage
+                        describes.
+                      enum:
+                      - gpu-pcie-parent
+                      - gpu-pcie-root
+                      - gpu-pcie-link-width-normal
+                      - gpu-nic-shared-ancestor
+                      - nic-lldp-remote
+                      type: string
+                    reason:
+                      description: reason tells why the coverage has this state.
+                      maxLength: 512
+                      minLength: 1
+                      type: string
+                    state:
+                      description: state is the coverage state.
+                      enum:
+                      - Normal
+                      - Missing
+                      - Unknown
+                      - Unsupported
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                  required:
+                  - evidenceRefs
+                  - name
+                  - pathKind
+                  - reason
+                  - state
+                  type: object
+                  x-kubernetes-validations:
+                  - message: coverage.state Normal requires observedAt, latestObservedAt,
+                      expiresAt and evidenceRefs
+                    rule: self.state != 'Normal' || (has(self.observedAt) && has(self.latestObservedAt)
+                      && has(self.expiresAt) && size(self.evidenceRefs) > 0)
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              evidenceRefs:
+                description: evidenceRefs are the evidence items behind the status.
+                items:
+                  description: EvidenceSummary is an evidence item behind the device
+                    status.
+                  properties:
+                    expiresAt:
+                      description: expiresAt is when the evidence stops being fresh.
+                      format: date-time
+                      type: string
+                    id:
+                      description: id identifies the evidence.
+                      maxLength: 128
+                      minLength: 1
+                      type: string
+                    observedAt:
+                      description: observedAt is when the evidence was observed.
+                      format: date-time
+                      type: string
+                    summary:
+                      description: summary is a one-line description of the evidence.
+                      maxLength: 512
+                      type: string
+                  required:
+                  - expiresAt
+                  - id
+                  - observedAt
+                  - summary
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - id
+                x-kubernetes-list-type: map
+              findingRefs:
+                description: findingRefs are the findings that concern the device.
+                items:
+                  description: FindingSummary is a finding that concerns the device.
+                  properties:
+                    id:
+                      description: id identifies the finding.
+                      maxLength: 128
+                      minLength: 1
+                      type: string
+                    severity:
+                      description: severity is the finding severity.
+                      maxLength: 64
+                      minLength: 1
+                      type: string
+                    state:
+                      description: state is the finding state.
+                      maxLength: 64
+                      minLength: 1
+                      type: string
+                    type:
+                      description: type is the finding type.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                  required:
+                  - id
+                  - severity
+                  - state
+                  - type
+                  type: object
+                maxItems: 16
+                type: array
+                x-kubernetes-list-map-keys:
+                - id
+                x-kubernetes-list-type: map
+              graphRevision:
+                description: graphRevision identifies the evidence graph revision
+                  of the assessment.
+                maxLength: 128
+                minLength: 1
+                type: string
+              intentObservedAt:
+                description: intentObservedAt is when the controller first saw the
+                  current intent.
+                format: date-time
+                type: string
+              lifecyclePhase:
+                description: lifecyclePhase is the lifecycle phase of the device.
+                enum:
+                - Pending
+                - Validating
+                - Ready
+                - Degraded
+                - MaintenancePending
+                - MaintenanceReady
+                - Retiring
+                - Retired
+                - Unknown
+                maxLength: 256
+                minLength: 1
+                type: string
+              observedGeneration:
+                description: |-
+                  observedGeneration is the metadata.generation the status was computed
+                  for.
+                format: int64
+                type: integer
+              observedRequestID:
+                description: observedRequestID is the spec.request.id the status was
+                  computed for.
+                maxLength: 128
+                minLength: 1
+                type: string
+              qualification:
+                description: qualification is the path qualification verdict.
+                enum:
+                - Qualified
+                - Disqualified
+                - Unknown
+                maxLength: 256
+                minLength: 1
+                type: string
+            required:
+            - actualBinding
+            - allocation
+            - conditions
+            - coverage
+            - evidenceRefs
+            - findingRefs
+            - intentObservedAt
+            - lifecyclePhase
+            - observedGeneration
+            - observedRequestID
+            - qualification
+            type: object
+            x-kubernetes-validations:
+            - message: graphRevision is required when qualification is Qualified or
+                Disqualified
+              rule: self.qualification == 'Unknown' || has(self.graphRevision)
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,428 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: nodepathstates.infrastructure.data-path-assurance.io
+spec:
+  group: infrastructure.data-path-assurance.io
+  names:
+    kind: NodePathState
+    listKind: NodePathStateList
+    plural: nodepathstates
+    singular: nodepathstate
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.nodeRef.name
+      name: NODE
+      type: string
+    - jsonPath: .status.graphRevision
+      name: REVISION
+      type: string
+    - jsonPath: .status.evidenceCompleteness
+      name: COMPLETE
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: NodePathState is the path state of one Node, owned by that Node.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: NodePathStateSpec identifies the Node a NodePathState describes.
+            properties:
+              nodeRef:
+                description: nodeRef is the described Node. It is immutable.
+                properties:
+                  name:
+                    description: name is the object name.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: uid is the object UID.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                - uid
+                type: object
+            required:
+            - nodeRef
+            type: object
+            x-kubernetes-validations:
+            - message: spec.nodeRef is immutable
+              rule: self.nodeRef == oldSelf.nodeRef
+          status:
+            description: NodePathStateStatus is the observed path state of one node.
+            properties:
+              collectorSession:
+                description: collectorSession is the collector session of the observation.
+                format: int64
+                minimum: 1
+                type: integer
+              conditions:
+                description: conditions are the node path conditions.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: conditions must have an allowed type and reason, an observedGeneration,
+                    and a message of 1 to 1024 characters
+                  rule: self.all(c, c.type in ['NodeEligible', 'EvidenceFresh', 'GateOwned',
+                    'CleanupReady'] && c.reason in ['Ready', 'Validating', 'Degraded',
+                    'CoverageMissing', 'EvidenceStale', 'IdentityConflict', 'UIDMismatch',
+                    'AllocationUnknown', 'FenceMissing', 'Conflict', 'NoMatchingDevices',
+                    'PartialSnapshot', 'BundleMismatch', 'FutureObservation', 'UntrustedSource',
+                    'UnadmittedSnapshot', 'TargetCapacityExceeded', 'CleanupPending',
+                    'CleanupStable', 'CleanupCompleted', 'OwnershipConflict', 'InternalError']
+                    && has(c.observedGeneration) && size(c.message) >= 1 && size(c.message)
+                    <= 1024)
+              deviceSummaries:
+                description: deviceSummaries are the short results of the GPUDevices
+                  on the node.
+                items:
+                  description: DeviceSummary is the short result of one GPUDevice
+                    on the node.
+                  properties:
+                    desiredState:
+                      description: desiredState is the lifecycle state the operator
+                        asks for.
+                      enum:
+                      - InService
+                      - Maintenance
+                      - Retired
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    lifecyclePhase:
+                      description: lifecyclePhase is the lifecycle phase of the device.
+                      enum:
+                      - Pending
+                      - Validating
+                      - Ready
+                      - Degraded
+                      - MaintenancePending
+                      - MaintenanceReady
+                      - Retiring
+                      - Retired
+                      - Unknown
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    name:
+                      description: name is the GPUDevice name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    observedGeneration:
+                      description: observedGeneration is the GPUDevice generation
+                        the result is for.
+                      format: int64
+                      type: integer
+                    qualification:
+                      description: qualification is the path qualification verdict
+                        of the device.
+                      enum:
+                      - Qualified
+                      - Disqualified
+                      - Unknown
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    uid:
+                      description: uid is the GPUDevice UID.
+                      maxLength: 128
+                      minLength: 1
+                      type: string
+                  required:
+                  - desiredState
+                  - lifecyclePhase
+                  - name
+                  - observedGeneration
+                  - qualification
+                  - uid
+                  type: object
+                maxItems: 256
+                type: array
+                x-kubernetes-list-map-keys:
+                - uid
+                x-kubernetes-list-type: map
+              evidenceCompleteness:
+                description: evidenceCompleteness tells how complete the evidence
+                  snapshot is.
+                enum:
+                - Unknown
+                - Complete
+                - Partial
+                maxLength: 256
+                minLength: 1
+                type: string
+              gateOwnership:
+                description: gateOwnership records the ownership of the node gate.
+                properties:
+                  cleanupPhase:
+                    description: cleanupPhase is the phase of the gate cleanup.
+                    enum:
+                    - None
+                    - Pending
+                    - Stable
+                    - Completed
+                    - Orphaned
+                    - OwnershipConflict
+                    type: string
+                  cleanupRequestedAt:
+                    description: cleanupRequestedAt is when the cleanup was requested.
+                    format: date-time
+                    type: string
+                  effect:
+                    description: effect is the taint effect of the gate.
+                    enum:
+                    - NoSchedule
+                    type: string
+                  key:
+                    description: key is the taint key of the gate.
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                  lastRecoveryDigest:
+                    description: lastRecoveryDigest is the digest of the last recovery
+                      point.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  lastRecoveryPointAt:
+                    description: lastRecoveryPointAt is when the last recovery point
+                      was recorded.
+                    format: date-time
+                    type: string
+                  nodeUID:
+                    description: nodeUID is the UID of the gated Node.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  ownerFleetUID:
+                    description: ownerFleetUID is the UID of the owning GPUFleet.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  policy:
+                    description: policy is the policy the fleet held when it took
+                      the gate.
+                    properties:
+                      freshnessSeconds:
+                        description: freshnessSeconds is how long an observation counts
+                          as fresh.
+                        format: int32
+                        maximum: 86400
+                        minimum: 1
+                        type: integer
+                      policyVersion:
+                        description: policyVersion identifies the policy.
+                        maxLength: 128
+                        minLength: 1
+                        type: string
+                      readyForSeconds:
+                        description: |-
+                          readyForSeconds is how long a device must stay qualified before it is
+                          ready.
+                        format: int32
+                        maximum: 86400
+                        minimum: 1
+                        type: integer
+                      requiredCoverage:
+                        description: requiredCoverage is the coverage list of the
+                          policy.
+                        items:
+                          description: |-
+                            FleetCoverageRequirement names one evidence coverage a fleet requires from
+                            every device.
+                          properties:
+                            name:
+                              description: name identifies the requirement inside
+                                its list.
+                              maxLength: 253
+                              minLength: 1
+                              pattern: ^[A-Za-z0-9._-]+$
+                              type: string
+                            pathKind:
+                              description: pathKind is the kind of physical path the
+                                coverage describes.
+                              enum:
+                              - gpu-pcie-parent
+                              - gpu-pcie-root
+                              - gpu-pcie-link-width-normal
+                              - gpu-nic-shared-ancestor
+                              - nic-lldp-remote
+                              type: string
+                            required:
+                              description: required tells whether missing coverage
+                                disqualifies the device.
+                              type: boolean
+                          required:
+                          - name
+                          - pathKind
+                          - required
+                          type: object
+                        maxItems: 32
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    required:
+                    - freshnessSeconds
+                    - policyVersion
+                    - readyForSeconds
+                    - requiredCoverage
+                    type: object
+                  recoveryControllerID:
+                    description: recoveryControllerID identifies the controller that
+                      runs the recovery.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  recoveryStartedAt:
+                    description: recoveryStartedAt is when the recovery started, if
+                      it did.
+                    format: date-time
+                    type: string
+                  value:
+                    description: value is the taint value of the gate.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - cleanupPhase
+                - cleanupRequestedAt
+                - effect
+                - key
+                - nodeUID
+                - ownerFleetUID
+                - policy
+                - value
+                type: object
+              graphRevision:
+                description: graphRevision identifies the evidence graph revision
+                  of the assessment.
+                maxLength: 128
+                minLength: 1
+                type: string
+              nodeRef:
+                description: nodeRef is the described Node.
+                properties:
+                  name:
+                    description: name is the object name.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: uid is the object UID.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                - uid
+                type: object
+              observedGeneration:
+                description: |-
+                  observedGeneration is the metadata.generation the status was computed
+                  for.
+                format: int64
+                type: integer
+            required:
+            - conditions
+            - deviceSummaries
+            - evidenceCompleteness
+            - nodeRef
+            - observedGeneration
+            type: object
+            x-kubernetes-validations:
+            - message: graphRevision is required when evidenceCompleteness is Complete
+                or Partial
+              rule: self.evidenceCompleteness == 'Unknown' || has(self.graphRevision)
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
