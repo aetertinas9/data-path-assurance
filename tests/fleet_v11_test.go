@@ -672,3 +672,76 @@ func TestGFL_013_078_ContinuityTimestampRangeValidation(t *testing.T) {
 		t.Fatalf("zero node omission form invalid: %#v/%v", unknownNode, err)
 	}
 }
+
+// GFL-013/GFL-007/GFL-078: the protobuf timestamp range is a range of UTC
+// instants (0001-01-01T00:00:00Z..9999-12-31T23:59:59.999999999Z, the zero
+// instant excluded for required values). The same instant must validate the
+// same way whatever Location the time.Time carries: a valid instant viewed far
+// east or west of UTC stays valid, and an instant past either bound stays
+// invalid even when its local calendar year is 1 or 9999.
+func TestGFL_007_013_078_TimestampRangeIsUTCInstantRange(t *testing.T) {
+	east := time.FixedZone("UTC+14", 14*3600)
+	west := time.FixedZone("UTC-12", -12*3600)
+	firstValid := time.Date(1, time.January, 1, 0, 0, 0, 1, time.UTC)
+	lastValid := time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)
+	beforeFirst := time.Date(0, time.December, 31, 23, 59, 59, 0, time.UTC)
+	afterLast := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	observed := fleetT0.Add(50 * time.Minute)
+
+	workload := func(created, deleted time.Time) fleet.WorkloadRef {
+		return fleet.WorkloadRef{Namespace: "default", Name: "pod", UID: "pod-uid", Container: "worker", CreatedAt: created, DeletedAt: deleted}
+	}
+	fence := func(expires time.Time) fleet.FenceAcknowledgement {
+		return fleet.FenceAcknowledgement{
+			Node: fleet.NodeRef{ClusterID: "cluster-a", Name: "node-a", UID: "node-uid"}, DeviceUID: "device-a", BootID: "boot-a", Session: 1,
+			RequestID: "request-a", EvidenceID: "fence-ev", Source: model.SourceRef{Type: string(model.SourceTypeAgent), Name: "maintenance"},
+			MetadataGeneration: 1, State: fleet.FenceAcknowledged, ObservedAt: observed, ExpiresAt: expires, TrustProfileID: "fence-profile",
+		}
+	}
+	fields := []struct {
+		name  string
+		lower bool // the lower bound can be exercised without tripping an ordering rule
+		check func(time.Time) error
+	}{
+		{"WorkloadRef.CreatedAt (required)", true, func(at time.Time) error { return workload(at, time.Time{}).Validate() }},
+		{"WorkloadRef.DeletedAt (optional)", false, func(at time.Time) error { return workload(observed, at).Validate() }},
+		{"FenceAcknowledgement.ExpiresAt (expiry)", false, func(at time.Time) error { return fence(at).Validate() }},
+	}
+	cases := []struct {
+		name    string
+		at      time.Time
+		valid   bool
+		isLower bool
+	}{
+		{"first valid instant viewed west (local year 0)", firstValid.In(west), true, true},
+		{"instant before the range viewed east (local year 1)", beforeFirst.In(east), false, true},
+		{"last valid instant viewed east (local year 10000)", lastValid.In(east), true, false},
+		{"instant after the range viewed west (local year 9999)", afterLast.In(west), false, false},
+		{"last valid instant in UTC", lastValid, true, false},
+		{"instant after the range in UTC", afterLast, false, false},
+	}
+	for _, f := range fields {
+		for _, c := range cases {
+			if c.isLower && !f.lower {
+				continue
+			}
+			err := f.check(c.at)
+			switch {
+			case c.valid && err != nil:
+				t.Errorf("GFL-013 %s, %s (%s): Validate() = %v, want nil", f.name, c.name, c.at.UTC().Format(time.RFC3339Nano), err)
+			case !c.valid && !errors.Is(err, fleet.ErrInvalidInput):
+				t.Errorf("GFL-013 %s, %s (%s): Validate() = %v, want ErrInvalidInput", f.name, c.name, c.at.UTC().Format(time.RFC3339Nano), err)
+			}
+		}
+	}
+
+	// GFL-007: one instant, one result, in every Location.
+	for _, at := range []time.Time{firstValid, lastValid, beforeFirst, afterLast, time.Date(9999, time.December, 31, 12, 0, 0, 0, time.UTC)} {
+		want := workload(at, time.Time{}).Validate() == nil
+		for _, loc := range []*time.Location{east, west, time.Local} {
+			if got := workload(at.In(loc), time.Time{}).Validate() == nil; got != want {
+				t.Errorf("GFL-007 instant %s in %s: valid=%v, want %v as in UTC", at.UTC().Format(time.RFC3339Nano), loc, got, want)
+			}
+		}
+	}
+}

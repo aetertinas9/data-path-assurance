@@ -275,6 +275,9 @@ func TestGKA021_NewValidationTable(t *testing.T) {
 		{"RenewDeadline == 1.2 x RetryPeriod (3s/2.5s)", dur(4*time.Second, 3*time.Second, 2500*time.Millisecond), false},
 		{"RenewDeadline 3s+1ns over RetryPeriod 2.5s", dur(4*time.Second, 3*time.Second+1, 2500*time.Millisecond), true},
 		{"RetryPeriod > RenewDeadline", dur(4*time.Second, 3*time.Second, 5*time.Second), false},
+		// 1.2 x RetryPeriod beyond the Duration range: no RenewDeadline can exceed it on any GOARCH.
+		{"RetryPeriod 2400000h (1.2 x retry overflows Duration)", dur(20*time.Second, 10*time.Second, 2400000*time.Hour), false},
+		{"RetryPeriod max Duration", dur(20*time.Second, 10*time.Second, time.Duration(1<<63-1)), false},
 		{"defaults applied first: Lease 5s vs default Renew 10s", dur(5*time.Second, 0, 0), false},
 		{"defaults applied first: default Lease 15s vs Renew 20s", dur(0, 20*time.Second, 0), false},
 		{"defaults applied first: default Renew 10s vs Retry 9s", dur(0, 0, 9*time.Second), false},

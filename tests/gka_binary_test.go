@@ -334,6 +334,9 @@ func TestGKA160_FlagGrammar(t *testing.T) {
 		gkaCBadCase("retry 9s makes renew 10s <= 1.2 x retry", relation, "", "--leader-election-retry-period", "9s"),
 		gkaCBadCase("renew exactly 1.2 x retry", relation, "", "--leader-election-lease-duration", "5s", "--leader-election-renew-deadline", "600ms", "--leader-election-retry-period", "500ms"),
 		gkaCBadCase("renew equals retry", relation, "", "--leader-election-lease-duration", "5s", "--leader-election-renew-deadline", "500ms", "--leader-election-retry-period", "500ms"),
+		// 1.2 x retry beyond the Duration range must still violate the relation on every GOARCH.
+		gkaCBadCase("retry 2400000h makes 1.2 x retry overflow", relation, "", "--leader-election-lease-duration", "20s", "--leader-election-renew-deadline", "10s", "--leader-election-retry-period", "2400000h"),
+		gkaCBadCase("retry at the Duration maximum", relation, "", "--leader-election-lease-duration", "20s", "--leader-election-renew-deadline", "10s", "--leader-election-retry-period", "9223372036854775807ns"),
 	)
 
 	// unknown flags, positional arguments, missing values

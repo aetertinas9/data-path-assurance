@@ -172,6 +172,63 @@ func TestGFL_007_041_042_124_DeviceReadyRequiresNewCompositePoints(t *testing.T)
 	}
 }
 
+// GFL-041/GFL-042/GFL-043: path qualification is computed from path evidence,
+// separately from the lifecycle phase. Once a new composite point is Qualified,
+// re-evaluating the same cached bundle keeps the window, Qualified and the
+// previous deadline for every desired intent, with and without completion
+// evidence, exactly as for InService; only the phase follows the intent.
+func TestGFL_041_042_043_CachedQualificationIndependentOfDesired(t *testing.T) {
+	bundle := func(t *testing.T, at time.Time, seq uint64, desired fleet.DesiredState, completion bool) fleet.AssessmentBundle {
+		t.Helper()
+		b := fleetBundle(t, at, seq, desired)
+		if completion {
+			c := fleetCompletionBundle(t, at, desired)
+			allocation := *c.Allocation
+			allocation.Sequence, allocation.BundleRevision = seq, b.GraphRevision
+			b.CollectorTrust.Sources, b.Allocation, b.FenceTrust, b.Fence = c.CollectorTrust.Sources, &allocation, c.FenceTrust, c.Fence
+		}
+		return b
+	}
+	for _, tc := range []struct {
+		name       string
+		desired    fleet.DesiredState
+		completion bool
+		phase      fleet.LifecyclePhase
+	}{
+		{"InService", fleet.DesiredInService, false, fleet.PhaseReady},
+		{"Maintenance pending", fleet.DesiredMaintenance, false, fleet.PhaseMaintenancePending},
+		{"Maintenance ready", fleet.DesiredMaintenance, true, fleet.PhaseMaintenanceReady},
+		{"Retired pending", fleet.DesiredRetired, false, fleet.PhaseRetiring},
+		{"Retired done", fleet.DesiredRetired, true, fleet.PhaseRetired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			firstAt := fleetT0.Add(10 * time.Minute)
+			first, err := fleet.EvaluateDevice(bundle(t, firstAt, 0, tc.desired, tc.completion), nil, firstAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondAt := firstAt.Add(30 * time.Second)
+			second, err := fleet.EvaluateDevice(bundle(t, secondAt, 1, tc.desired, tc.completion), &first, secondAt)
+			if err != nil || !second.AcceptedNormalPoint || second.Qualification != fleet.QualificationQualified || second.ValidUntil.IsZero() || second.Phase != tc.phase {
+				t.Fatalf("new continuous point = %#v/%v, want Qualified with phase %s", second, err, tc.phase.String())
+			}
+			cached, err := fleet.EvaluateDevice(bundle(t, secondAt, 1, tc.desired, tc.completion), &second, secondAt.Add(10*time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cached.AcceptedNormalPoint || cached.Phase != tc.phase || cached.Qualification != fleet.QualificationQualified ||
+				!cached.ValidUntil.Equal(second.ValidUntil) || !cached.ReadyWindowStartedAt.Equal(second.ReadyWindowStartedAt) {
+				t.Errorf("cached re-evaluation = phase %s, qualification %s, accepted %v, ValidUntil %v, window %v; want %s, Qualified, false, %v, %v",
+					cached.Phase.String(), cached.Qualification.String(), cached.AcceptedNormalPoint, cached.ValidUntil, cached.ReadyWindowStartedAt,
+					tc.phase.String(), second.ValidUntil, second.ReadyWindowStartedAt)
+			}
+			if err := cached.Validate(); err != nil {
+				t.Errorf("cached decision is invalid: %v", err)
+			}
+		})
+	}
+}
+
 // GFL-011/GFL-024/GFL-040/GFL-122: partial or unadmitted snapshots are Unknown
 // and cannot produce normal points or lifecycle completion.
 func TestGFL_011_024_040_122_PartialAndUnadmittedSnapshotsStayUnknown(t *testing.T) {

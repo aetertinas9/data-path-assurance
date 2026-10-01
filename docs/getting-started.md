@@ -98,9 +98,10 @@ The result is always marked `offline`. The live transport flags (`--server`,
 `--cluster-id`, `--ca-file`, `--cert-file`, `--key-file`) are rejected with exit
 code 5 until the controller API exists.
 
-There is no live runtime or cluster installation procedure yet. In
-particular, do not expect a live agent, a controller, or Kubernetes resources
-to be present in the current source tree.
+There is no live runtime or cluster installation procedure yet: the source
+tree has no live agent, live evidence ingest, or installable deployment. The
+controller and custom resources described next are for local API server tests
+and disposable test clusters.
 
 ## Kubernetes API tests and the status controller
 

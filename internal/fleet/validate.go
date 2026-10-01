@@ -20,16 +20,24 @@ func required(s, field string) error {
 	return nil
 }
 func requiredTime(t time.Time, field string) error {
-	if t.IsZero() || t.Year() < 1 || t.Year() > 9999 {
+	if t.IsZero() || !inTimestampRange(t) {
 		return invalidf("%s is not a valid required timestamp", field)
 	}
 	return nil
 }
 func optionalTime(t time.Time, field string) error {
-	if !t.IsZero() && (t.Year() < 1 || t.Year() > 9999) {
+	if !t.IsZero() && !inTimestampRange(t) {
 		return invalidf("%s is outside the timestamp range", field)
 	}
 	return nil
+}
+
+// inTimestampRange reports whether t's instant lies in the protobuf timestamp
+// range, 0001-01-01T00:00:00Z through 9999-12-31T23:59:59.999999999Z. The year
+// is taken in UTC so the answer does not depend on t's Location (GFL-013).
+func inTimestampRange(t time.Time) bool {
+	y := t.UTC().Year()
+	return y >= 1 && y <= 9999
 }
 func expiry(observed, expires time.Time, prefix string) error {
 	if err := requiredTime(observed, prefix+".ObservedAt"); err != nil {

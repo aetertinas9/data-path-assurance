@@ -975,7 +975,10 @@ func advanceReadyWindow(d DeviceDecision, previous *DeviceDecision, b Assessment
 		d.Phase = PhaseReady
 		d.Qualification = QualificationQualified
 		d.Reason = reasonReady
-	} else if !d.AcceptedNormalPoint && stable && previous.Phase == PhaseReady && previous.Qualification == QualificationQualified && previous.ValidUntil.After(d.EvaluatedAt) && d.ValidUntil.After(d.EvaluatedAt) {
+	} else if !d.AcceptedNormalPoint && stable && (previous.Phase == PhaseReady || previous.Desired != DesiredInService) && previous.Qualification == QualificationQualified && previous.ValidUntil.After(d.EvaluatedAt) && d.ValidUntil.After(d.EvaluatedAt) {
+		// finishIntentPhase replaces the phase of a Maintenance or Retired
+		// decision, so only an InService previous can carry PhaseReady; the
+		// qualification itself follows path evidence alone (GFL-043).
 		d.Phase = PhaseReady
 		d.Qualification = QualificationQualified
 		d.ValidUntil = minTime(previous.ValidUntil, d.ValidUntil)

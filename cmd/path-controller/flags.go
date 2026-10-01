@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -201,13 +202,25 @@ func parseArgs(args []string) (config, error) {
 		cfg.resync = defaultResync
 	}
 	// The relation of controller.New: LeaseDuration > RenewDeadline > 1.2 x RetryPeriod.
-	if cfg.leaseDuration <= cfg.renewDeadline || cfg.renewDeadline <= time.Duration(1.2*float64(cfg.retryPeriod)) {
+	if cfg.leaseDuration <= cfg.renewDeadline || cfg.renewDeadline <= jitteredRetry(cfg.retryPeriod) {
 		return cfg, &usageError{msgBadRelation}
 	}
 	if cfg.controllerID == "" {
 		cfg.controllerID = defaultControllerID()
 	}
 	return cfg, nil
+}
+
+// jitteredRetry returns 1.2 x retry, saturated at the largest Duration.
+// Converting an out-of-range float64 to an integer is implementation-dependent
+// in Go (amd64 yields the minimum int64), which would let a huge retry period
+// pass the relation check.
+func jitteredRetry(retry time.Duration) time.Duration {
+	f := 1.2 * float64(retry)
+	if f >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return time.Duration(f)
 }
 
 // defaultControllerID is "<hostname>-<8 hex>": characters of the hostname

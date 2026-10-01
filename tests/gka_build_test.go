@@ -1536,3 +1536,44 @@ func TestGKA198_NoNewDocumentationFiles(t *testing.T) {
 		})
 	}
 }
+
+// GKA-198 (maintainer follow-up): the controller and its custom resources ship
+// in the source tree, so no user document may tell readers they are absent. A
+// sentence that announces something missing must not name them while
+// cmd/path-controller and deploy/crds exist.
+func TestGKA198_UserDocsDoNotDenyShippedController(t *testing.T) {
+	root := gkaCRoot(t)
+	for _, p := range []string{"cmd/path-controller/main.go", "deploy/crds"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err != nil {
+			t.Fatalf("GKA-198 precondition: %s: %v", p, err)
+		}
+	}
+	docs, err := filepath.Glob(filepath.Join(root, "docs", "*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs = append(docs, filepath.Join(root, "README.md"))
+	containsAny := func(s string, words []string) bool {
+		for _, w := range words {
+			if strings.Contains(s, w) {
+				return true
+			}
+		}
+		return false
+	}
+	absence := []string{"do not expect", "does not yet provide", "do not yet provide", "not present in", "absent from"}
+	shipped := []string{"a controller", "the controller", "kubernetes resources", "custom resources", "crds"}
+	for _, p := range docs {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.ToLower(strings.Join(strings.Fields(string(b)), " "))
+		for sentence := range strings.SplitSeq(text, ". ") {
+			if containsAny(sentence, absence) && containsAny(sentence, shipped) {
+				rel, _ := filepath.Rel(root, p)
+				t.Errorf("GKA-198: %s says the shipped controller or custom resources are missing: %q", filepath.ToSlash(rel), sentence)
+			}
+		}
+	}
+}

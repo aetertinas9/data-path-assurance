@@ -9,9 +9,12 @@ import (
 
 func sortStrings(s []string) { sort.Strings(s) }
 
-// validTime reports whether t is a usable, non-zero timestamp.
+// validTime reports whether t is a usable, non-zero timestamp. The year is
+// taken in UTC, the form metaTime and optTime write, so the answer does not
+// depend on t's Location.
 func validTime(t time.Time) bool {
-	return !t.IsZero() && t.Year() >= 1 && t.Year() <= 9999
+	y := t.UTC().Year()
+	return !t.IsZero() && y >= 1 && y <= 9999
 }
 
 func metaTime(t time.Time) metav1.Time { return metav1.NewTime(t.UTC()) }

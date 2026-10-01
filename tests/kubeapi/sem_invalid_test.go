@@ -229,6 +229,11 @@ func gkaSInvalidCases() []gkaSInvalidCase {
 			na.Devices = na.Devices[:1]
 			na.Node = nil
 		})},
+		{name: "p5farzonetime", positive: true, dev: dev(func(da *app.DeviceAssessment) {
+			// The last representable instant viewed at UTC+14 has local year 10000;
+			// the record time is still valid, so the location must not matter.
+			da.Evidence[0].ExpiresAt = time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC).In(time.FixedZone("UTC+14", 14*3600))
+		})},
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"time"
 
@@ -143,7 +144,7 @@ func normalize(opts Options) (normalized, error) {
 	if le.LeaseDuration <= le.RenewDeadline {
 		return n, invalidOption("LeaderElection.LeaseDuration must exceed RenewDeadline")
 	}
-	if le.RenewDeadline <= time.Duration(leaderElectionJitter*float64(le.RetryPeriod)) {
+	if le.RenewDeadline <= jitteredRetry(le.RetryPeriod) {
 		return n, invalidOption("LeaderElection.RenewDeadline must exceed 1.2 x RetryPeriod")
 	}
 
@@ -180,4 +181,16 @@ func applyRESTDefaults(cfg *rest.Config) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
 	}
+}
+
+// jitteredRetry returns leaderElectionJitter x retry, saturated at the largest
+// Duration. Converting an out-of-range float64 to an integer is
+// implementation-dependent in Go (amd64 yields the minimum int64), which would
+// let a huge RetryPeriod pass the relation check.
+func jitteredRetry(retry time.Duration) time.Duration {
+	f := leaderElectionJitter * float64(retry)
+	if f >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return time.Duration(f)
 }
