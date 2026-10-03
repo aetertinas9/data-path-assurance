@@ -210,6 +210,13 @@ func cannedBindings(fixture *os.Root, i int, sf *sysfsFrame, diags frameDiagnost
 		return nil
 	}
 
+	return bindGPURows(rows, sf, diags)
+}
+
+// bindGPURows keeps the parsed inventory rows whose address is a GPU function
+// of the frame and records the rows and GPU functions that do not pair up
+// (GFO-075). The offline canned inventory and the live NVIDIA query share it.
+func bindGPURows(rows []GPUInventoryEntry, sf *sysfsFrame, diags frameDiagnostics) []GPUInventoryEntry {
 	gpus := map[string]bool{}
 	for _, f := range sf.selected {
 		if sf.entries[f].gpu {

@@ -6,14 +6,15 @@ the edge of the application.
 
 ## Implemented core
 
-The current code is a library-level domain core, two offline tools, and a
-Kubernetes status controller. `internal/agent`, run by
-`path-agent --fixture-root`, turns a fixture sysfs tree and canned NVIDIA
-inventory into a JSON snapshot artifact. `pathctl explain` evaluates that
+The current code is a library-level domain core, a host agent, an offline
+explain tool, and a Kubernetes status controller with an authenticated
+snapshot ingest. `internal/agent`, run by `path-agent --fixture-root`, turns a
+fixture sysfs tree and canned NVIDIA inventory into a JSON snapshot artifact;
+in live mode `path-agent` streams the same snapshots to the controller (see
+[Live snapshot ingest](#live-snapshot-ingest)). `pathctl explain` evaluates an
 artifact offline (see [Offline explain](#offline-explain)). `path-controller`
 publishes status for the `GPUFleet`, `GPUDevice`, and `NodePathState` custom
 resources (see [Kubernetes API and status controller](#kubernetes-api-and-status-controller)).
-There is no live agent and no live evidence ingest.
 
 Arrows point from a shared building block to the package that consumes it.
 
@@ -126,7 +127,7 @@ flowchart LR
     K["GPUFleet · GPUDevice · Node<br/>(watched objects)"]
     C["internal/kubernetes/controller<br/>selection, scopes, projection,<br/>leader election, status writes"]
     P["internal/app NodeAssessor<br/>LiveAssessor"]
-    S["LiveBundleSource<br/>(no observation today)"]
+    S["LiveBundleSource<br/>(live ingest, or no observation)"]
     F["internal/fleet<br/>EvaluateDevice · AggregateNode"]
     O["CRD status · NodePathState ·<br/>Audit Node condition"]
 
@@ -147,11 +148,54 @@ are kept in memory only and are not restored from status after a restart or a
 leader change. Custom resource definitions are applied from the checked-in
 manifests; the controller never creates or changes them.
 
+### Live snapshot ingest
+
+With `--ingest-listen`, `cmd/path-controller` also wires the ingest server and
+hands its bundle source to the evaluation port; without it the port reports no
+observation.
+
+```mermaid
+flowchart LR
+    A["path-agent live<br/>internal/agent/liveclient"]
+    T["internal/transport/mtls<br/>TLS 1.3, URI SAN identity"]
+    I["internal/ingest<br/>gRPC server, size and rate limits,<br/>acks and status codes"]
+    L["internal/app/liveingest<br/>validation, canonical digest,<br/>admission, per-node reducer"]
+    R["internal/app/framecore<br/>topology and digests shared<br/>with the offline path"]
+    D["internal/kubernetes/ingestadapter<br/>Node lookup, collectorSession,<br/>Lease leader gate"]
+    P["internal/app LiveAssessor"]
+
+    A --> T --> I --> L
+    R --> L
+    D --> L
+    L --> P
+```
+
+The wire contract is `api/proto/dpa/ingest/v1alpha1/ingest.proto`, compiled into
+the checked-in `internal/ingest/ingestpb`. A stream starts with a hello whose
+cluster, node name, and node UID must match the client certificate and the real
+Node; the adapter then raises `NodePathState.status.collectorSession` with an
+optimistic-concurrency update that rewrites only that field, and the previous
+stream of the node is ended. Each frame is limited (4 MiB on the wire, 16 MiB
+inflated, 4096 observations, one frame per 10 s with a burst of 3), validated,
+digested with the same canonical encoding as the offline artifact, and admitted
+by the fleet snapshot rules; a rejected frame changes nothing, and an accepted
+one is published as an immutable per-node view. The reducer keeps the latest
+16 accepted frames, at most 8192 observations, and builds each bundle at the
+controller's evaluation time from the newest frame and that window, with the
+same topology and digest code as the offline explain path. Sources outside the
+trust profile are stamped so that the fleet library treats them as untrusted.
+The ingest accepts hellos only while the process holds the leader Lease, keeps
+no evidence across restarts, and persists only the session counter.
+`internal/app/liveingest` and `internal/app/framecore` import no gRPC,
+protobuf, or Kubernetes package, and `path-agent` links no Kubernetes or native
+PCIe code.
+
 ## Target executable integration
 
 The following flow describes the intended integration around the implemented
-domain libraries. The Kubernetes resources and the status controller exist; the
-live source adapters, authenticated ingest, and the scheduling gate are not
+domain libraries. The Kubernetes resources, the status controller, and the
+authenticated snapshot ingest exist; PodResources allocation, maintenance
+fencing, the controller explain API, and the scheduling gate are not
 implemented yet.
 
 ```mermaid
@@ -188,8 +232,10 @@ those actions.
 
 The fleet library evaluates supplied identity, evidence, lifecycle intent, and
 allocation state. It does not collect those inputs from a real host or cluster;
-the offline explain path evaluates recorded fixture snapshots only.
-Live collectors, transport, the controller explain API, the scheduling gate,
-and deployment manifests remain future work. The Kubernetes resources and the
-controller are tested against a local API server only; the system has not been
-validated on a real cluster or real GPUs or made available for installation.
+the offline explain path evaluates recorded fixture snapshots, and the live
+ingest evaluates what an authenticated agent reports. PodResources allocation
+evidence, fencing, the controller explain API, the scheduling gate, and
+deployment manifests remain future work. The Kubernetes resources, the
+controller, and the ingest are tested against a local API server and in-process
+agents only; the system has not been validated on a real cluster or real GPUs or
+made available for installation.

@@ -1,0 +1,50 @@
+syntax = "proto3";
+package dpa.ingest.v1alpha1;
+option go_package = "github.com/aetertinas9/data-path-assurance/internal/ingest/ingestpb";
+import "google/protobuf/timestamp.proto";
+
+service Ingest { rpc Stream(stream ClientFrame) returns (stream ServerFrame); }
+
+message ClientFrame { oneof frame { ClientHello hello = 1; SnapshotFrame snapshot = 2; } }      // GLI
+message ServerFrame { oneof frame { ServerHello hello = 1; SnapshotAck ack = 2; } }              // GLI
+message ClientHello { string version = 1; string cluster_id = 2; string node_name = 3;           // GFL-082
+                      string node_uid = 4; string boot_id = 5; }
+message ServerHello { int64 session = 1; string collector_profile_id = 2; }                      // GFL-082
+enum Completeness { COMPLETENESS_UNSPECIFIED = 0; COMPLETE = 1; PARTIAL = 2; }                   // GFL-083 (value numbers are GLI)
+message SnapshotFrame {                                                                          // GFL-083
+  string node_uid = 1; string boot_id = 2; int64 session = 3; uint64 sequence = 4;
+  Completeness completeness = 5; google.protobuf.Timestamp observed_at = 6;
+  HostSnapshotV1 payload = 7; bytes payload_digest = 8; string bundle_revision = 9; }
+enum AckCode { ACK_CODE_UNSPECIFIED = 0; ACCEPTED = 1; DUPLICATE = 2; OUT_OF_ORDER = 3;         // GFL-083 (value numbers are GLI)
+               GAP = 4; WRONG_SESSION = 5; CONFLICT = 6; INVALID = 7; }
+message SnapshotAck { AckCode code = 1; int64 accepted_session = 2;                              // GFL-083
+                      uint64 expected_next_sequence = 3; string message = 4; }
+
+message HostSnapshotV1 {                                                                         // GFL-083
+  repeated Asset assets = 1; repeated Edge edges = 2; repeated EdgeEvidence edge_evidence = 3;
+  repeated Observation observations = 4; repeated GPUBinding gpu_bindings = 5;
+  AllocationBatch allocation_batch = 6; }
+message Alias { string namespace = 1; string value = 2; }                                        // GFO-082
+message Asset { string kind = 1; string canonical = 2; repeated Alias aliases = 3; }             // GFL-083
+message Edge { string from_key = 1; string relation = 2; string to_key = 3; string origin = 4; } // GFL-083
+message EdgeEvidence { uint32 edge_index = 1; string kind = 2; string source_type = 3;           // GFL-083
+  string source_name = 4; google.protobuf.Timestamp observed_at = 5;
+  google.protobuf.Timestamp expires_at = 6; string evidence_id = 7; }
+message SourceRef { string type = 1; string name = 2; }
+message Value { oneof v { int64 int_value = 1; double float_value = 2; bool bool_value = 3; string string_value = 4; } } // GLI
+message Dimension { string key = 1; string value = 2; }                                          // GLI (repeated, ordered by key)
+message Observation {                                                                            // GFL-083 numbers unchanged
+  string id = 1; SourceRef source = 2; Asset subject = 3; string signal = 4; Value value = 5;
+  string unit = 6; repeated Dimension dimensions = 7; google.protobuf.Timestamp observed_at = 8;
+  google.protobuf.Timestamp received_at = 9; google.protobuf.Timestamp expires_at = 10;
+  uint64 sequence = 11; string quality = 12; string raw_digest = 13; }
+message GPUBinding { string uuid = 1; string serial = 2; string bdf = 3; string source_type = 4; // GFL-083
+  string source_name = 5; string evidence_id = 6; google.protobuf.Timestamp observed_at = 7;
+  google.protobuf.Timestamp expires_at = 8; }
+enum AllocationProfile { ALLOCATION_PROFILE_UNSPECIFIED = 0; NVIDIA_PODRESOURCES_UUID = 1; UNSUPPORTED = 2; } // GLI
+message AllocationEntry { string resource_name = 1; string device_id = 2; string pod_namespace = 3; // GFL-083
+  string pod_name = 4; string container_name = 5; }
+message AllocationBatch { string node_uid = 1; string boot_id = 2; int64 session = 3;            // GFL-083
+  uint64 sequence = 4; google.protobuf.Timestamp observed_at = 5; google.protobuf.Timestamp expires_at = 6;
+  bool complete = 7; repeated string evidence_refs = 8; AllocationProfile profile = 9;
+  repeated AllocationEntry entries = 10; }

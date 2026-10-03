@@ -12,10 +12,37 @@ import (
 	"time"
 )
 
-// gfoLiveFlags are the GFL-096 live flags listed by GFO-010.
+// gfoLiveFlags are the GFL-096 live flags listed by GFO-010 (v1.4 adds
+// --boot-id-file, GFL-096 v1.2).
 var gfoLiveFlags = []string{
 	"controller", "cluster-id", "node-name", "node-uid", "sysfs-root",
-	"ca-file", "cert-file", "key-file", "nvidia-smi", "pod-resources-socket",
+	"ca-file", "cert-file", "key-file", "nvidia-smi", "pod-resources-socket", "boot-id-file",
+}
+
+// gfoLiveRequired are the eight required live flags in a fixed order (GLI-080).
+var gfoLiveRequired = []string{"controller", "cluster-id", "node-name", "node-uid", "sysfs-root", "ca-file", "cert-file", "key-file"}
+
+// gfoLiveArgs returns the eight required live flags with values that satisfy
+// every GLI-080 value rule (the paths do not exist), the overrides applied by
+// flag name, then the extra arguments. An override with the value "\x00"
+// drops the flag.
+func gfoLiveArgs(over map[string]string, extra ...string) []string {
+	defaults := map[string]string{
+		"controller": "localhost:1", "cluster-id": gfoCluster, "node-name": gfoNodeName, "node-uid": gfoNodeUID,
+		"sysfs-root": "/nonexistent/sysfs-root", "ca-file": "/nonexistent/ca-file", "cert-file": "/nonexistent/cert-file", "key-file": "/nonexistent/key-file",
+	}
+	var args []string
+	for _, fl := range gfoLiveRequired {
+		v := defaults[fl]
+		if o, ok := over[fl]; ok {
+			v = o
+		}
+		if v == "\x00" {
+			continue
+		}
+		args = append(args, "--"+fl, v)
+	}
+	return append(args, extra...)
 }
 
 // gfoFillNames creates n non-canonical regular files in bus/pci/devices of a
@@ -44,8 +71,8 @@ func TestGFO001_PathAgentEmitsOfflineArtifact(t *testing.T) {
 	}
 }
 
-// GFO-010: the argument table, "--x v" == "--x=v", and usage (exit 2) over
-// live-unsupported (exit 5).
+// GFO-010 (v1.4): the argument table, "--x v" == "--x=v", and the live mode
+// priority usage (exit 2) > live-unsupported (exit 5) > live-config (exit 6).
 func TestGFO010_ArgumentTable(t *testing.T) {
 	t.Parallel()
 	bin := gfoBuildAgent(t)
@@ -81,7 +108,15 @@ func TestGFO010_ArgumentTable(t *testing.T) {
 		{"fixture_plus_unknown", []string{"--fixture-root", root, "--bogus"}, 2},
 		{"help_plus_fixture", []string{"--help", "--fixture-root", root}, 2},
 		{"invalid_fixture_plus_live_is_usage", []string{"--fixture-root", filepath.Join(root, "missing"), "--controller", "127.0.0.1:1"}, 2},
-		{"all_live_flags", nil, 5},
+		// v1.4 (GFO-010/GLI-080): live flags without --fixture-root are live mode. Every value here is a
+		// path-like string, so --controller (host:port) and --cluster-id (pattern) violate the value rules: exit 2.
+		{"all_live_flags", nil, 2},
+		{"all_live_flags_valid_values_with_pod_resources", gfoLiveArgs(nil, "--pod-resources-socket", "/nonexistent/pod-resources-socket"), 5},
+		{"all_live_flags_valid_values_without_pod_resources", gfoLiveArgs(nil), 6},
+		{"value_rule_violation_beats_pod_resources", gfoLiveArgs(map[string]string{"cluster-id": "bad id"}, "--pod-resources-socket", "/nonexistent/s"), 2},
+		{"missing_required_beats_pod_resources", gfoLiveArgs(map[string]string{"node-uid": "\x00"}, "--pod-resources-socket", "/nonexistent/s"), 2},
+		{"pod_resources_beats_live_config", gfoLiveArgs(nil, "--boot-id-file", "/nonexistent/boot-id", "--pod-resources-socket", "/nonexistent/s"), 5},
+		{"fixture_plus_boot_id_file_is_usage", []string{"--fixture-root", root, "--boot-id-file", "/nonexistent/boot-id"}, 2},
 		{"live_plus_unknown", []string{"--controller", "127.0.0.1:1", "--bogus"}, 2},
 		{"live_plus_positional", []string{"--controller", "127.0.0.1:1", "extra"}, 2},
 		{"live_repeated", []string{"--controller", "127.0.0.1:1", "--controller", "127.0.0.1:2"}, 2},
@@ -99,8 +134,9 @@ func TestGFO010_ArgumentTable(t *testing.T) {
 			tc{"fixture_plus_" + fl, []string{"--fixture-root", root, "--" + fl, "/nonexistent/" + fl}, 2},
 			tc{"fixture_plus_" + fl + "_equals", []string{"--fixture-root=" + root, "--" + fl + "=/nonexistent/" + fl}, 2},
 			tc{fl + "_before_fixture", []string{"--" + fl, "/nonexistent/" + fl, "--fixture-root", root}, 2},
-			tc{"live_only_" + fl, []string{"--" + fl, "/nonexistent/" + fl}, 5},
-			tc{"live_only_" + fl + "_equals", []string{"--" + fl + "=/nonexistent/" + fl}, 5},
+			// v1.4: a single live flag leaves required flags missing (exit 2, not 5).
+			tc{"live_only_" + fl, []string{"--" + fl, "/nonexistent/" + fl}, 2},
+			tc{"live_only_" + fl + "_equals", []string{"--" + fl + "=/nonexistent/" + fl}, 2},
 		)
 	}
 	for _, c := range cases {
@@ -129,8 +165,8 @@ func TestGFO010_HelpOnly(t *testing.T) {
 	}
 }
 
-// GFO-011: exit codes 1..5 with their tokens and the fixture-mode priority
-// 3 > 4 > 1 (stdout write failure is exit 1 "internal").
+// GFO-011 (v1.4): exit codes 1..6 with their tokens, the fixture-mode priority
+// 3 > 4 > 1 (stdout write failure is exit 1 "internal") and the live priority 2 > 5 > 6.
 func TestGFO011_ExitCodesTokensAndPriority(t *testing.T) {
 	t.Parallel()
 	bin := gfoBuildAgent(t)
@@ -178,7 +214,16 @@ func TestGFO011_ExitCodesTokensAndPriority(t *testing.T) {
 		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, "--bogus"), 2, "GFO-011 usage")
 	})
 	t.Run("exit5_live", func(t *testing.T) {
-		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, "--node-name", "n"), 5, "GFO-011 live")
+		// v1.4: exit 5 is --pod-resources-socket with no usage error (GFO-013); --node-name alone is exit 2.
+		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, gfoLiveArgs(nil, "--pod-resources-socket", "/nonexistent/s")...), 5, "GFO-011 live")
+		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, "--node-name", "n"), 2, "GFO-011 incomplete live flags")
+	})
+	t.Run("exit6_live_config", func(t *testing.T) {
+		gfoFail(t, gfoExec(t, bin, gfoRunOpt{Timeout: 20 * time.Second}, gfoLiveArgs(nil)...), 6, "GFO-011 live config")
+	})
+	t.Run("live_priority_2_5_6", func(t *testing.T) {
+		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, gfoLiveArgs(map[string]string{"controller": "127.0.0.1:1"}, "--pod-resources-socket", "/nonexistent/s")...), 2, "GFO-011 2>5")
+		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, gfoLiveArgs(nil, "--pod-resources-socket", "/nonexistent/s")...), 5, "GFO-011 5>6")
 	})
 }
 
@@ -236,8 +281,11 @@ func TestGFO012_OutputStreamsAndSecrecy(t *testing.T) {
 			}{
 				{[]string{"--fixture-root", f.Root, "--" + fl, secret}, 2},
 				{[]string{"--fixture-root", f.Root, "--" + fl + "=" + secret}, 2},
-				{[]string{"--" + fl, secret}, 5},
-				{[]string{"--" + fl + "=" + secret}, 5},
+				{[]string{"--" + fl, secret}, 2},
+				{[]string{"--" + fl + "=" + secret}, 2},
+				// v1.4: with every required flag valid the secret-valued flag reaches exit 5 / exit 6, never stderr.
+				{gfoLiveArgs(map[string]string{fl: secret}, "--pod-resources-socket", "/nonexistent/s"), 5},
+				{gfoLiveArgs(map[string]string{fl: secret}), 6},
 				{[]string{"--" + fl, secret, "--" + fl, secret}, 2},
 				{[]string{"--" + fl, secret, "--bogus"}, 2},
 				{[]string{"--" + fl, secret, "extra"}, 2},
@@ -254,18 +302,28 @@ func TestGFO012_OutputStreamsAndSecrecy(t *testing.T) {
 		huge := strings.Repeat("a", 20000)
 		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, "--"+huge), 2, "GFO-012 huge flag name")
 		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, huge), 2, "GFO-012 huge positional")
-		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, "--controller", huge), 5, "GFO-012 huge live value")
+		// v1.4 (GLI-080): --controller must be host:port with a DNS host, so a 20000-byte value is a usage error.
+		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, "--controller", huge), 2, "GFO-012 huge live value")
 		gfoFail(t, gfoExec(t, bin, gfoRunOpt{}, "--fixture-root", filepath.Join(t.TempDir(), huge)), 3, "GFO-012 huge fixture path")
 	})
 }
 
-// GFO-013: live flags end with exit 5 within 1s without opening flag paths,
-// connecting or executing anything; secret values never reach stderr.
+// GFO-013 (v1.4, GLI-080): in live mode --pod-resources-socket without a
+// usage error ends with exit 5 within 1s without opening flag paths,
+// connecting or executing anything (the FIFO --pod-resources-socket and
+// --key-file are never opened); an incomplete or invalid live flag set is exit
+// 2; a complete valid set without --pod-resources-socket is exit 6 (start-up
+// file validation) within 1s without waiting on a FIFO, connecting or running
+// anything; secret values never reach stderr.
 func TestGFO013_LiveModeUnsupportedWithoutSideEffects(t *testing.T) {
 	bin := gfoBuildAgent(t)
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "secret.fifo")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notDir := filepath.Join(dir, "regular-file")
+	if err := os.WriteFile(notDir, []byte("x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	marker := filepath.Join(dir, "nvidia-smi-ran")
@@ -289,33 +347,56 @@ func TestGFO013_LiveModeUnsupportedWithoutSideEffects(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-
-	cases := [][]string{
-		{"--key-file", fifo},
-		{"--ca-file", fifo},
-		{"--cert-file", fifo},
-		{"--sysfs-root", fifo},
-		{"--pod-resources-socket", fifo},
-		{"--nvidia-smi", script},
-		{"--controller", ln.Addr().String()},
-		{"--controller", "10.255.255.1:65000"},
-		{"--controller", ln.Addr().String(), "--cluster-id", gfoCluster, "--node-name", gfoNodeName, "--node-uid", gfoNodeUID,
-			"--sysfs-root", fifo, "--ca-file", fifo, "--cert-file", fifo, "--key-file", fifo, "--nvidia-smi", script,
-			"--pod-resources-socket", fifo},
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, args := range cases {
-		res := gfoExec(t, bin, gfoRunOpt{Timeout: 10 * time.Second}, args...)
-		name := "GFO-013 " + strings.Join(args, " ")
-		gfoFail(t, res, 5, name)
+	ctl := "localhost:" + port // GLI-022: the controller host is a DNS name, never an IP literal
+
+	type tc struct {
+		name string
+		args []string
+		exit int
+	}
+	cases := []tc{
+		// usage (exit 2): incomplete flag sets and the IP-literal controller, even next to the socket flag (2 > 5).
+		{"incomplete_key_file", []string{"--key-file", fifo}, 2},
+		{"incomplete_ca_file", []string{"--ca-file", fifo}, 2},
+		{"incomplete_cert_file", []string{"--cert-file", fifo}, 2},
+		{"incomplete_sysfs_root", []string{"--sysfs-root", fifo}, 2},
+		{"incomplete_pod_resources_socket", []string{"--pod-resources-socket", fifo}, 2},
+		{"incomplete_nvidia_smi", []string{"--nvidia-smi", script}, 2},
+		{"incomplete_boot_id_file", []string{"--boot-id-file", fifo}, 2},
+		{"ip_literal_controller_alone", []string{"--controller", ln.Addr().String()}, 2},
+		{"unroutable_ip_controller_alone", []string{"--controller", "10.255.255.1:65000"}, 2},
+		{"ip_literal_controller_with_everything", gfoLiveArgs(map[string]string{"controller": ln.Addr().String(), "sysfs-root": fifo, "ca-file": fifo, "cert-file": fifo, "key-file": fifo},
+			"--nvidia-smi", script, "--pod-resources-socket", fifo, "--boot-id-file", fifo), 2},
+		// live-unsupported (exit 5): a valid flag set with --pod-resources-socket; nothing is opened, run or dialed.
+		{"pod_resources_socket_fifo", gfoLiveArgs(map[string]string{"controller": ctl}, "--pod-resources-socket", fifo), 5},
+		{"everything_fifo_with_pod_resources_socket", gfoLiveArgs(map[string]string{"controller": ctl, "sysfs-root": fifo, "ca-file": fifo, "cert-file": fifo, "key-file": fifo},
+			"--nvidia-smi", script, "--pod-resources-socket", fifo, "--boot-id-file", fifo), 5},
+		// live-config (exit 6): no --pod-resources-socket; the start-up validation fails without waiting on a FIFO.
+		{"key_file_fifo", gfoLiveArgs(map[string]string{"controller": ctl, "key-file": fifo}, "--nvidia-smi", script), 6},
+		{"ca_file_fifo", gfoLiveArgs(map[string]string{"controller": ctl, "ca-file": fifo}, "--nvidia-smi", script), 6},
+		{"cert_file_fifo", gfoLiveArgs(map[string]string{"controller": ctl, "cert-file": fifo}, "--nvidia-smi", script), 6},
+		{"boot_id_file_fifo", gfoLiveArgs(map[string]string{"controller": ctl}, "--nvidia-smi", script, "--boot-id-file", fifo), 6},
+		{"all_tls_files_fifo", gfoLiveArgs(map[string]string{"controller": ctl, "ca-file": fifo, "cert-file": fifo, "key-file": fifo}, "--nvidia-smi", script, "--boot-id-file", fifo), 6},
+		{"sysfs_root_is_not_a_directory", gfoLiveArgs(map[string]string{"controller": ctl, "sysfs-root": notDir}, "--nvidia-smi", script), 6},
+		{"nothing_exists", gfoLiveArgs(map[string]string{"controller": ctl}, "--nvidia-smi", script), 6},
+	}
+	for _, c := range cases {
+		res := gfoExec(t, bin, gfoRunOpt{Timeout: 10 * time.Second}, c.args...)
+		name := "GFO-013 " + c.name
+		gfoFail(t, res, c.exit, name)
 		if res.Elapsed > time.Second {
 			t.Errorf("%s: took %v, want <= 1s", name, res.Elapsed)
 		}
-		if bytes.Contains(res.Stderr, []byte(fifo)) {
-			t.Errorf("%s: stderr contains the secret flag value %q", name, fifo)
+		if bytes.Contains(res.Stderr, []byte(fifo)) || bytes.Contains(res.Stderr, []byte(notDir)) {
+			t.Errorf("%s: stderr contains a flag value path", name)
 		}
 	}
 	if _, err := os.Stat(marker); err == nil {
-		t.Errorf("GFO-013: --nvidia-smi executable was run in live-unsupported mode")
+		t.Errorf("GFO-013: --nvidia-smi executable was run before start-up validation ended")
 	}
 	select {
 	case <-accepted:

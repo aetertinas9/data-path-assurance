@@ -164,15 +164,42 @@ could be mistaken for a confirmed absence mark the frame `PARTIAL`; width and
 NVIDIA failures only add diagnostics.
 
 Exit codes are 0 (artifact written), 1 (internal error), 2 (usage error),
-3 (invalid fixture), 4 (bound exceeded), and 5 (live mode requested, which is
-not implemented yet). `internal/agent` also provides `RunNVIDIAQuery`, a
-bounded `nvidia-smi` runner (absolute path, no shell, fixed arguments, 5 s
-timeout, 64 KiB stdout, 4 KiB stderr) for the future live mode.
+3 (invalid fixture), 4 (bound exceeded), and 5 (`--pod-resources-socket`
+given, which this build does not support). `internal/agent` also provides
+`RunNVIDIAQuery`, a bounded `nvidia-smi` runner (absolute path, no shell, fixed
+arguments, 5 s timeout, 64 KiB stdout, 4 KiB stderr). Fixture mode does not
+observe a live host. `pathctl explain` (below) evaluates and explains the
+artifact. The collector is pure Go and does not use the native PCIe observer.
 
-This is offline fixture collection only. It does not observe a live host and
-has not been run against real GPU hardware. `pathctl explain` (below) evaluates
-and explains the artifact. The collector is pure Go and does not use the native PCIe observer.
-Its tests have been run on macOS arm64 and in a linux/arm64 container.
+### Live mode
+
+Without `--fixture-root`, `path-agent` streams snapshots of the host to
+`path-controller` over gRPC with mutual TLS 1.3:
+
+```sh
+bin/path-agent --controller ingest.example.internal:8443 --cluster-id lab-a \
+  --node-name gpu-node-1 --node-uid <Kubernetes Node UID> --sysfs-root /host/sys \
+  --ca-file ca.pem --cert-file node.pem --key-file node-key.pem \
+  [--nvidia-smi /usr/bin/nvidia-smi] [--boot-id-file /proc/sys/kernel/random/boot_id]
+```
+
+The client certificate carries the URI SAN
+`spiffe://data-path-assurance.local/cluster/<cluster-id>/node/<node-uid>` and
+the client-authentication key usage; the controller host must be a DNS name
+covered by the server certificate. Every 15 seconds the agent collects the
+same sysfs and NVIDIA inventory as fixture mode from `--sysfs-root`, validates
+the frame and its canonical digest itself, and sends it after a hello that
+assigns a session; evidence expires after 300 seconds. It waits for each
+acknowledgement, and after any rejection or stream error it reconnects with a
+new session, rereading the CA, certificate, and key files, with exponential
+backoff (1 s to 60 s, ±20% jitter). The agent uses no Kubernetes credentials
+and writes nothing on the host. Live exit codes are 0 (stopped by SIGINT or
+SIGTERM), 1 (internal error), 2 (usage error), 5 (`--pod-resources-socket`
+given), and 6 (unreadable TLS files, a certificate that does not match the
+cluster and node flags, an unusable sysfs root, or an unreadable boot ID);
+network and server errors are retried, not fatal. Live mode has been exercised
+against an in-process controller in tests on macOS arm64 and in a linux/arm64
+container, not against real GPU hardware or a real cluster.
 
 ## Offline explain
 
@@ -272,11 +299,28 @@ condition with server-side apply, leaving every other condition, taint, and
 label untouched. It never writes taints, finalizers, or Pods; an `Enforce`
 fleet is reported with `gate_not_implemented` in its condition messages.
 
-There is no live evidence source yet. The controller wires an evaluation port
-that reports no observation, so every device stays `Unknown` with reason
-`Validating` and the message token `no_observation` until authenticated live
-ingest is implemented. This is a truthful cold start, not a qualification
-result.
+Without `--ingest-listen` the controller wires an evaluation port that reports
+no observation, so every device stays `Unknown` with reason `Validating` and
+the message token `no_observation`: a truthful cold start, not a qualification
+result. With `--ingest-listen` (plus `--ingest-service-dns`,
+`--ingest-cert-file`, `--ingest-key-file`, `--ingest-ca-file`, and optionally
+`--ingest-profile-id`, default `live:default`) it also serves the
+authenticated snapshot ingest described under Live mode, and only while it
+holds the leader Lease. A hello must match the certificate identity, the
+cluster ID, and the Node's real UID, and the node must already have a
+NodePathState; the session is persisted in `status.collectorSession` with an
+optimistic-concurrency update that preserves every other status field. Each
+frame is size-, rate- (burst 3, one per 10 s per node), and schema-checked,
+recomputes the canonical digest, passes the snapshot admission rules, and is
+applied atomically; the controller keeps the latest 16 accepted frames (at most
+8192 observations) per node in memory and evaluates the newest one at its
+next pass. Sources that are not in the controller's trust profile never
+qualify. Because each accepted frame changes the graph revision, an enabled
+ingest makes the controller rewrite node and device status every pass; the
+`freshnessSeconds` of a live fleet should be at least 60, and
+`--leader-election-renew-deadline` should stay at 4 seconds or more (the ingest
+re-reads the Lease every 2 seconds and treats an older reading as lost
+leadership, dropping every node's observations).
 
 ```sh
 make envtest-assets     # download kube-apiserver and etcd 1.35.0 into build/envtest (network)
@@ -287,21 +331,25 @@ CGO_ENABLED=0 go build -o bin/path-controller ./cmd/path-controller
 bin/path-controller --kubeconfig <file> --cluster-id <id> --leader-election-namespace <namespace>
 ```
 
-`make test` includes the `tests/kubeapi` suite whenever the envtest binaries are
-present and skips it with a log line otherwise. The controller opens no network
-listener and never logs kubeconfig contents or API response bodies.
+`make test` includes the `tests/kubeapi` and `tests/liveingest/envtest` suites
+whenever the envtest binaries are present and skips them with a log line
+otherwise. The controller opens no network listener unless `--ingest-listen` is
+set, and then exactly one; it never logs kubeconfig contents, certificate
+contents, payload strings, or API response bodies. The ingest wire contract is
+`api/proto/dpa/ingest/v1alpha1/ingest.proto`; `make generate-proto` regenerates
+`internal/ingest/ingestpb` with pinned tools and `make verify-proto` fails when
+the checked-in code is stale (both need the network on first use).
 
 ## Product direction
 
-The pure lifecycle evaluation layer, the Kubernetes custom resources, and the
-status controller are implemented; live evidence is still future work. Planned
-host and transport adapters will collect and bind live identity and path
-evidence and feed the controller's evaluation port. The native PCIe observer is
-a building block for that host adapter, not the adapter itself. `path-agent`
-runs only in offline fixture mode, `pathctl` has only the offline explain path,
-and `path-controller` publishes only cold-start status. No live agent, live
-evidence ingest, controller explain API, scheduling gate, deployment manifests,
-live GPU collection, or validation on a real cluster is available yet.
+The pure lifecycle evaluation layer, the Kubernetes custom resources, the
+status controller, and authenticated live snapshot ingest from `path-agent` are
+implemented. Not yet available: PodResources allocation evidence and
+maintenance fencing, the controller explain API (`pathctl` has only the
+offline explain path), the scheduling gate, deployment manifests, live LLDP,
+and any validation on real GPU hardware or a real cluster. The native PCIe
+observer is a building block for a future host adapter, not part of the live
+agent.
 
 Active GPU work, reset, drain, and driver management remain the responsibility
 of operators such as GPU Operator.

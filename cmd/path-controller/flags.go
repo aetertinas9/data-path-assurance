@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,6 +27,14 @@ type config struct {
 	retryPeriod   time.Duration
 	resync        time.Duration
 	logLevel      string
+
+	// Live ingest (GLI-090). ingestListen == "" means ingest is off.
+	ingestListen     string
+	ingestServiceDNS string
+	ingestCertFile   string
+	ingestKeyFile    string
+	ingestCAFile     string
+	ingestProfileID  string
 }
 
 // The fixed usage messages (GKA-162). None carries a flag name or value.
@@ -53,6 +63,13 @@ const (
 	defaultResync        = 30 * time.Second
 	maxResync            = 30 * time.Second
 	logLevelDefault      = "info"
+
+	defaultIngestProfileID = "live:default"
+	// unmatchedSource and offlineProfilePrefix are the profile ID rules of the
+	// ingest server (GLI-073); the flag check repeats them so that a violation
+	// is a usage error before any file or network access.
+	unmatchedSource      = "unmatched-source"
+	offlineProfilePrefix = "offline:"
 )
 
 var (
@@ -60,6 +77,10 @@ var (
 	dnsLabelRe   = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 	// dnsSubdomainRe is the pattern of validation.IsDNS1123Subdomain.
 	dnsSubdomainRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+	// listenHostRe is the host of --ingest-listen: empty, a name, an IPv4
+	// address or an IPv6 address (brackets already removed, zone allowed).
+	listenHostRe = regexp.MustCompile(`^[A-Za-z0-9._:%-]*$`)
+	listenPortRe = regexp.MustCompile(`^[0-9]{1,5}$`)
 )
 
 func isDNSLabel(s string) bool { return len(s) <= 63 && dnsLabelRe.MatchString(s) }
@@ -70,6 +91,31 @@ func isDNSLabel(s string) bool { return len(s) <= 63 && dnsLabelRe.MatchString(s
 // same definition.
 func isDNSSubdomain(s string) bool {
 	return len(s) <= 253 && dnsSubdomainRe.MatchString(s)
+}
+
+// validIngestListen reports whether v is host:port with a port of 1 to 65535;
+// the host may be empty.
+func validIngestListen(v string) bool {
+	host, port, err := net.SplitHostPort(v)
+	if err != nil || !listenPortRe.MatchString(port) || !listenHostRe.MatchString(host) {
+		return false
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// validProfileID reports whether id is 1 to 128 bytes of 0x21-0x7E (identifier
+// ASCII), without the offline: prefix and not the unmatched-source marker.
+func validProfileID(id string) bool {
+	if len(id) < 1 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < 0x21 || id[i] > 0x7e {
+			return false
+		}
+	}
+	return !strings.HasPrefix(id, offlineProfilePrefix) && id != unmatchedSource
 }
 
 // durationFlag sets *dst from a positive Go duration within [lo, hi] (hi 0
@@ -122,6 +168,19 @@ func flagTable() []flagSpec {
 				}
 				return false
 			}},
+		{"ingest-listen", "host:port", "address of the live ingest listener, port 1-65535, host may be empty; unset disables live ingest (default)",
+			func(c *config, v string) bool { c.ingestListen = v; return validIngestListen(v) }},
+		{"ingest-service-dns", "dns", "DNS name the ingest server certificate carries (required with --ingest-listen)",
+			func(c *config, v string) bool { c.ingestServiceDNS = v; return isDNSSubdomain(v) }},
+		{"ingest-cert-file", "path", "ingest server certificate chain, PEM (required with --ingest-listen)",
+			func(c *config, v string) bool { c.ingestCertFile = v; return v != "" }},
+		{"ingest-key-file", "path", "ingest server private key, PEM (required with --ingest-listen)",
+			func(c *config, v string) bool { c.ingestKeyFile = v; return v != "" }},
+		{"ingest-ca-file", "path", "CA certificates that sign the agent client certificates, PEM (required with --ingest-listen)",
+			func(c *config, v string) bool { c.ingestCAFile = v; return v != "" }},
+		{"ingest-profile-id", "id", "collector profile id of live ingest, 1-128 bytes of 0x21-0x7E, not offline: prefixed, not " +
+			unmatchedSource + " (default " + defaultIngestProfileID + ")",
+			func(c *config, v string) bool { c.ingestProfileID = v; return validProfileID(v) }},
 	}
 }
 
@@ -185,6 +244,22 @@ func parseArgs(args []string) (config, error) {
 	}
 	if cfg.clusterID == "" || cfg.namespace == "" {
 		return cfg, &usageError{msgMissingFlag}
+	}
+	// The ingest flags go together (GLI-090): without --ingest-listen no other
+	// --ingest-* flag may be given, with it the four files and the DNS name are
+	// required. The test is "was the flag given", not "differs from default".
+	_, listenGiven := raw["ingest-listen"]
+	if !listenGiven {
+		for _, name := range []string{"ingest-service-dns", "ingest-cert-file", "ingest-key-file", "ingest-ca-file", "ingest-profile-id"} {
+			if _, given := raw[name]; given {
+				return cfg, &usageError{msgInvalidValue}
+			}
+		}
+	} else if cfg.ingestServiceDNS == "" || cfg.ingestCertFile == "" || cfg.ingestKeyFile == "" || cfg.ingestCAFile == "" {
+		return cfg, &usageError{msgMissingFlag}
+	}
+	if listenGiven && cfg.ingestProfileID == "" {
+		cfg.ingestProfileID = defaultIngestProfileID
 	}
 	if cfg.leaderID == "" {
 		cfg.leaderID = defaultLeaderID

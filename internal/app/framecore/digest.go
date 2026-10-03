@@ -1,4 +1,4 @@
-package app
+package framecore
 
 import (
 	"bytes"
@@ -44,40 +44,41 @@ func digestHex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// edgeIdentity is the edge identity key: endpoints, relation and origin.
-func edgeIdentity(e graph.Edge) string {
+// EdgeIdentity is the edge identity key: endpoints, relation and origin.
+func EdgeIdentity(e graph.Edge) string {
 	return e.From.Key() + "\x00" + e.To.Key() + "\x00" + e.Relation.String() + "\x00" + e.Origin.String()
 }
 
-// topologyDigest is the SHA-256 of
+// TopologyDigest is the SHA-256 (lowercase hex) of
 // str("dpa.TopologyDigest.v1") ‖ str(P) ‖ list(str(asset key)) ‖ list(edge entry),
 // where an edge entry is its endpoints, relation and origin followed by the
 // list of (kind, source type, source name) of that edge's provenance. Every
-// list is ordered by encoded bytes; equal elements are kept.
-func topologyDigest(p model.PartitionKey, f *Frame) string {
-	provenance := make(map[string][][]byte, len(f.Provenance))
-	for _, pr := range f.Provenance {
+// list is ordered by encoded bytes; equal elements are kept. The assets, edges
+// and provenance are those of one frame.
+func TopologyDigest(p model.PartitionKey, frameAssets []model.AssetRef, frameEdges []graph.Edge, frameProvenance []fleet.EdgeProvenance) string {
+	provenance := make(map[string][][]byte, len(frameProvenance))
+	for _, pr := range frameProvenance {
 		var x encoder
 		x.str(pr.Kind.String())
 		x.str(pr.Source.Type)
 		x.str(pr.Source.Name)
-		id := edgeIdentity(pr.Edge)
+		id := EdgeIdentity(pr.Edge)
 		provenance[id] = append(provenance[id], x.b)
 	}
-	assets := make([][]byte, 0, len(f.Assets))
-	for _, a := range f.Assets {
+	assets := make([][]byte, 0, len(frameAssets))
+	for _, a := range frameAssets {
 		var x encoder
 		x.str(a.Key())
 		assets = append(assets, x.b)
 	}
-	edges := make([][]byte, 0, len(f.Edges))
-	for _, ed := range f.Edges {
+	edges := make([][]byte, 0, len(frameEdges))
+	for _, ed := range frameEdges {
 		var x encoder
 		x.str(ed.From.Key())
 		x.str(ed.Relation.String())
 		x.str(ed.To.Key())
 		x.str(ed.Origin.String())
-		x.list(provenance[edgeIdentity(ed)], true)
+		x.list(provenance[EdgeIdentity(ed)], true)
 		edges = append(edges, x.b)
 	}
 	var e encoder
@@ -121,13 +122,13 @@ func baselineValue(x *encoder, v model.Value) {
 	x.str(s)
 }
 
-// baselineDigest is the SHA-256 of
+// BaselineDigest is the SHA-256 (lowercase hex) of
 // str("dpa.BaselineDigest.v1") ‖ str(P) ‖ list(entry). For every subject of
 // the window, the latest observation of each expected-width series is taken
 // and, of those, the ones with the latest instant form entries
 // str(subject key) ‖ value ‖ list(str(key) ‖ str(value), key order). Equal
 // entries are merged and the list is ordered by encoded bytes.
-func baselineDigest(p model.PartitionKey, w evidence.Window) string {
+func BaselineDigest(p model.PartitionKey, w evidence.Window) string {
 	seen := map[string]struct{}{}
 	var entries [][]byte
 	for _, subject := range w.Subjects() {
@@ -176,11 +177,12 @@ func baselineDigest(p model.PartitionKey, w evidence.Window) string {
 	return digestHex(e.b)
 }
 
-// provenanceFor indexes provenance by edge identity.
-func provenanceFor(list []fleet.EdgeProvenance) map[string][]fleet.EdgeProvenance {
+// ProvenanceIndex indexes provenance by edge identity (EdgeIdentity), keeping
+// the order of the list within one identity.
+func ProvenanceIndex(list []fleet.EdgeProvenance) map[string][]fleet.EdgeProvenance {
 	m := make(map[string][]fleet.EdgeProvenance, len(list))
 	for _, p := range list {
-		id := edgeIdentity(p.Edge)
+		id := EdgeIdentity(p.Edge)
 		m[id] = append(m[id], p)
 	}
 	return m

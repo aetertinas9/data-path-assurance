@@ -2,25 +2,18 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/aetertinas9/data-path-assurance/internal/app/framecore"
 	"github.com/aetertinas9/data-path-assurance/internal/domains/pcie"
 	"github.com/aetertinas9/data-path-assurance/internal/evidence"
 	"github.com/aetertinas9/data-path-assurance/internal/fleet"
 	"github.com/aetertinas9/data-path-assurance/internal/graph"
 	"github.com/aetertinas9/data-path-assurance/pkg/model"
-)
-
-const (
-	// windowHorizon is how far back the cumulative evidence window keeps a
-	// series, measured from its latest observation.
-	windowHorizon = 86400 * time.Second
-	// windowMaxSamples is the per-series capacity of the window: one
-	// observation per frame at most.
-	windowMaxSamples = 16
 )
 
 // replayResult is what the replay evaluation produced: the device and node
@@ -127,7 +120,7 @@ func evaluateReplay(r *Replay) (*replayResult, error) {
 		return nil, evaluationError("only part of the replay was admitted")
 	}
 
-	cfg := evidence.Config{MaxAge: r.Policy.Freshness, Horizon: windowHorizon, MaxSamples: windowMaxSamples}
+	cfg := framecore.WindowConfig(r.Policy.Freshness)
 	window, err := evidence.NewWindow(cfg)
 	if err != nil {
 		return nil, evaluationError("the evidence window configuration was rejected")
@@ -157,8 +150,8 @@ func evaluateReplay(r *Replay) (*replayResult, error) {
 			Admitted:              admitted,
 			GraphRevision:         frame.Envelope.BundleRevision,
 			WindowRevision:        frame.Envelope.BundleRevision,
-			TopologyDigest:        topologyDigest(partition, frame),
-			BaselineDigest:        baselineDigest(partition, window),
+			TopologyDigest:        framecore.TopologyDigest(partition, frame.Assets, frame.Edges, frame.Provenance),
+			BaselineDigest:        framecore.BaselineDigest(partition, window),
 			Topology:              topology,
 			Window:                window,
 			Provenance:            frame.Provenance,
@@ -227,17 +220,16 @@ func evaluateReplay(r *Replay) (*replayResult, error) {
 // frameTopology builds the topology snapshot of one frame from that frame's
 // payload alone.
 func frameTopology(partition model.PartitionKey, cfg evidence.Config, f *Frame) (*graph.Snapshot, error) {
-	state, err := graph.NewState(partition, cfg)
-	if err != nil {
+	snapshot, err := framecore.Topology(partition, cfg, f.Envelope.Sequence, f.Assets, f.Edges)
+	switch {
+	case errors.Is(err, framecore.ErrTopologyState):
 		return nil, evaluationError("the topology state could not be created")
-	}
-	resync, err := graph.NewResync(partition, f.Envelope.Sequence, f.Assets, f.Edges)
-	if err != nil {
+	case errors.Is(err, framecore.ErrTopologyRejected):
 		return nil, evaluationError("the frame topology was rejected")
-	}
-	state, _, err = state.Apply(resync)
-	if err != nil {
+	case errors.Is(err, framecore.ErrTopologyApply):
 		return nil, evaluationError("the frame topology could not be applied")
+	case err != nil:
+		return nil, evaluationError("the frame topology could not be built")
 	}
-	return state.Snapshot(), nil
+	return snapshot, nil
 }

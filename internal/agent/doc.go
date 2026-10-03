@@ -3,8 +3,9 @@
 // offline snapshot artifact built from a fixture tree.
 //
 // Every host path is resolved through an injected *os.Root. The package holds
-// no host path of its own, so a fixture tree and (later) a live host root go
-// through the same collector rules.
+// no host path of its own, so a fixture tree and a live host root go through
+// the same collector rules; CollectLive is the live entry point and leaves the
+// session, the sequence and the instants of a frame to its caller.
 //
 // In offline mode nothing here reads the wall clock, the environment, the
 // host name or the locale into an output value, and no process is started:

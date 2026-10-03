@@ -66,6 +66,7 @@ var gfoTokens = map[int]string{
 	3: "fixture_invalid",
 	4: "bound_exceeded",
 	5: "live_unsupported",
+	6: "live_config", // GFO-011 v1.4 (GLI-080): live mode start-up file, certificate, sysfs-root or boot-ID failure
 }
 
 // ---------------------------------------------------------------------------

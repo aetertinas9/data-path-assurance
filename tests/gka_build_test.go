@@ -341,7 +341,11 @@ func TestGKA002_NoOutOfScopeDeliverables(t *testing.T) {
 		case strings.HasPrefix(base, "dockerfile"), strings.HasPrefix(base, "containerfile"):
 			t.Errorf("GKA-002: %s is a container build file (S4a)", slash)
 		case strings.HasSuffix(base, ".proto"):
-			t.Errorf("GKA-002: %s is a protobuf file (S3b)", slash)
+			// v1.1 (gpu-fleet-live-ingest): GKA-002 is S3a's non-claim, it does not forbid the later feature's
+			// ingest.proto (gpu-fleet-live-ingest GLI-001 (a)); any other .proto stays a failure.
+			if slash != "api/proto/dpa/ingest/v1alpha1/ingest.proto" {
+				t.Errorf("GKA-002: %s is a protobuf file (S3b-2/3 deliver their own proto files in their own features)", slash)
+			}
 		case strings.Contains(base, "runbook"):
 			t.Errorf("GKA-002: %s is a runbook (S4a)", slash)
 		case strings.HasSuffix(base, ".yaml") || strings.HasSuffix(base, ".yml"):
@@ -373,17 +377,28 @@ func TestGKA002_NoOutOfScopeDeliverables(t *testing.T) {
 	if strings.Join(names, ",") != "crds,helm" {
 		t.Errorf("GKA-002: deploy/ contains %v, want exactly crds and helm (no RBAC, Deployment or chart)", names)
 	}
-	for _, dir := range []string{"deploy/helm", "api/proto"} {
-		es, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(dir)))
-		if err != nil {
-			t.Errorf("GKA-002/GKA-197: %s must stay as an empty directory holding only .gitkeep: %v", dir, err)
-			continue
+	es, err := os.ReadDir(filepath.Join(root, "deploy", "helm"))
+	if err != nil {
+		t.Errorf("GKA-002/GKA-197: deploy/helm must stay as an empty directory holding only .gitkeep: %v", err)
+	}
+	for _, e := range es {
+		if e.Name() != ".gitkeep" {
+			t.Errorf("GKA-002: deploy/helm/%s is out of scope (Helm chart is S4a)", e.Name())
 		}
-		for _, e := range es {
-			if e.Name() != ".gitkeep" {
-				t.Errorf("GKA-002: %s/%s is out of scope (Helm chart is S4a, proto is S3b)", dir, e.Name())
-			}
+	}
+	// v1.1 (gpu-fleet-live-ingest): api/proto holds exactly .gitkeep (GKA-197) and the files of
+	// gpu-fleet-live-ingest GLI-001 (a) / GLI-012; nothing else.
+	var protoFiles []string
+	_ = filepath.WalkDir(filepath.Join(root, "api", "proto"), func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			rel, _ := filepath.Rel(filepath.Join(root, "api", "proto"), path)
+			protoFiles = append(protoFiles, filepath.ToSlash(rel))
 		}
+		return nil
+	})
+	sort.Strings(protoFiles)
+	if got, want := strings.Join(protoFiles, ","), ".gitkeep,buf.gen.yaml,buf.yaml,dpa/ingest/v1alpha1/ingest.proto"; got != want {
+		t.Errorf("GKA-002/GKA-197: api/proto holds %q, want exactly %q", got, want)
 	}
 }
 
@@ -497,10 +512,13 @@ func TestGKA004_ImportRules(t *testing.T) {
 			}
 		}
 	}
-	// (d) the binary: standard library, internal/app and the controller only.
+	// (d) the binary (GKA v1.1): standard library, internal/app, the controller, the ingest wiring packages
+	// internal/ingest and internal/kubernetes/ingestadapter, and google.golang.org/grpc/grpclog (GLI-005);
+	// k8s.io/* and sigs.k8s.io/* stay forbidden.
 	for _, imp := range byPath[cmdPkg].Imports {
-		if !gkaCIsStd(imp) && imp != gkaCModule+"/internal/app" && imp != ctl {
-			t.Errorf("GKA-004(d): cmd/path-controller imports %s (standard library, internal/app and internal/kubernetes/controller only)", imp)
+		if !gkaCIsStd(imp) && imp != gkaCModule+"/internal/app" && imp != ctl &&
+			imp != gkaCModule+"/internal/ingest" && imp != gkaCModule+"/internal/kubernetes/ingestadapter" && imp != "google.golang.org/grpc/grpclog" {
+			t.Errorf("GKA-004(d): cmd/path-controller imports %s (standard library, internal/app, internal/kubernetes/controller, internal/ingest, internal/kubernetes/ingestadapter and google.golang.org/grpc/grpclog only)", imp)
 		}
 	}
 	// (e) only internal/kubernetes/... imports k8s.io or sigs.k8s.io directly.

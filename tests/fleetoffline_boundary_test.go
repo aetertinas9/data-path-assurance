@@ -115,12 +115,38 @@ func TestGFO101a_EscapeFixtures(t *testing.T) {
 	})
 }
 
-// GFO-002/GFO-003/GFO-102: path-agent builds with CGO_ENABLED=0 for the
-// three targets; its dependencies (CGO 0 and 1) are standard library or this
-// module, never internal/nativepcie, with no cgo files; (v1.3) this feature
-// adds no dependency of its own - require directives added by later ratified
-// contracts (GKA-190) are allowed, but the cmd/path-agent closure holds no
-// package of an external module; make arch-check passes.
+// gfoAgentAllowedExternalModules is the fixed list of external Go modules whose
+// packages make up the cmd/path-agent dependency closure (GFO-003/GFO-102 v1.4,
+// the fixed list of the live-ingest feature): the closure holds exactly these modules - none
+// missing, none added. The list is a constant of this test; it is never
+// computed from the module graph.
+var gfoAgentAllowedExternalModules = []string{
+	"golang.org/x/net",
+	"golang.org/x/sys",
+	"golang.org/x/text",
+	"google.golang.org/genproto/googleapis/rpc",
+	"google.golang.org/grpc",
+	"google.golang.org/protobuf",
+}
+
+func gfoModuleAllowedForAgent(module string) bool {
+	for _, m := range gfoAgentAllowedExternalModules {
+		if m == module {
+			return true
+		}
+	}
+	return false
+}
+
+// GFO-002/GFO-003/GFO-102 (v1.4): path-agent builds with CGO_ENABLED=0 for the
+// three targets; internal/agent (the offline collector) still depends on the
+// standard library and this module only; the cmd/path-agent closure (CGO 0 and
+// 1) holds only the standard library, this module and the packages of the
+// fixed external module list (grpc, protobuf and their transitive modules),
+// never internal/nativepcie, internal/kubernetes, k8s.io/, sigs.k8s.io/ (and
+// never runtime/cgo with CGO_ENABLED=0); the packages of this module have no
+// cgo files; this feature adds no dependency of its own; make arch-check
+// passes.
 func TestGFO102_GFO003_BuildAndDependencies(t *testing.T) {
 	t.Parallel()
 	root := gfoRepoRoot(t)
@@ -135,8 +161,10 @@ func TestGFO102_GFO003_BuildAndDependencies(t *testing.T) {
 		}
 		return string(out)
 	}
+	inModule := func(path string) bool { return path == gfoModule || strings.HasPrefix(path, gfoModule+"/") }
+	// internal/agent: unchanged strict closure (standard library and this module only).
 	for _, cgo := range []string{"0", "1"} {
-		out := run(t, []string{"CGO_ENABLED=" + cgo}, "go", "list", "-deps", "-f", "{{.ImportPath}}|{{.Standard}}|{{len .CgoFiles}}", "./cmd/path-agent", "./internal/agent")
+		out := run(t, []string{"CGO_ENABLED=" + cgo}, "go", "list", "-deps", "-f", "{{.ImportPath}}|{{.Standard}}|{{len .CgoFiles}}", "./internal/agent")
 		sc := bufio.NewScanner(strings.NewReader(out))
 		for sc.Scan() {
 			parts := strings.Split(sc.Text(), "|")
@@ -150,11 +178,53 @@ func TestGFO102_GFO003_BuildAndDependencies(t *testing.T) {
 			if std == "true" {
 				continue
 			}
-			if path != gfoModule && !strings.HasPrefix(path, gfoModule+"/") {
-				t.Errorf("GFO-003/GFO-102 CGO_ENABLED=%s: non-standard, non-module dependency %s", cgo, path)
+			if !inModule(path) {
+				t.Errorf("GFO-003/GFO-102 CGO_ENABLED=%s: internal/agent depends on the non-standard, non-module package %s", cgo, path)
 			}
 			if cgoFiles != "0" {
 				t.Errorf("GFO-003/GFO-102 CGO_ENABLED=%s: module package %s has %s cgo files", cgo, path, cgoFiles)
+			}
+		}
+	}
+	// cmd/path-agent (v1.4): the live client brings grpc and protobuf with their transitive modules.
+	for _, cgo := range []string{"0", "1"} {
+		seen := map[string]bool{}
+		out := run(t, []string{"CGO_ENABLED=" + cgo}, "go", "list", "-deps", "-f", "{{.ImportPath}}|{{.Standard}}|{{len .CgoFiles}}|{{if .Module}}{{.Module.Path}}{{end}}", "./cmd/path-agent")
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			parts := strings.Split(line, "|")
+			if len(parts) != 4 {
+				t.Fatalf("GFO-003/GFO-102 v1.4: unexpected go list line %q", line)
+			}
+			path, std, cgoFiles, module := parts[0], parts[1], parts[2], parts[3]
+			if std == "true" {
+				if cgo == "0" && path == "runtime/cgo" {
+					t.Errorf("GFO-102 v1.4 CGO_ENABLED=0: the path-agent closure holds runtime/cgo")
+				}
+				continue
+			}
+			switch {
+			case strings.HasSuffix(path, "/internal/nativepcie") || strings.Contains(path, "/internal/nativepcie/"):
+				t.Errorf("GFO-002/GFO-102 v1.4 CGO_ENABLED=%s: the path-agent closure holds %s", cgo, path)
+			case path == gfoModule+"/internal/kubernetes" || strings.HasPrefix(path, gfoModule+"/internal/kubernetes/"):
+				t.Errorf("GFO-102 v1.4 CGO_ENABLED=%s: the path-agent closure holds %s (the agent has no Kubernetes dependency)", cgo, path)
+			case strings.HasPrefix(path, "k8s.io/") || strings.HasPrefix(path, "sigs.k8s.io/") || strings.HasPrefix(module, "k8s.io/") || strings.HasPrefix(module, "sigs.k8s.io/"):
+				t.Errorf("GFO-102 v1.4 CGO_ENABLED=%s: the path-agent closure holds the Kubernetes package %s (module %q)", cgo, path, module)
+			}
+			if inModule(path) && module == gfoModule {
+				if cgoFiles != "0" {
+					t.Errorf("GFO-003/GFO-102 v1.4 CGO_ENABLED=%s: module package %s has %s cgo files", cgo, path, cgoFiles)
+				}
+				continue
+			}
+			if module == "" || !gfoModuleAllowedForAgent(module) || (path != module && !strings.HasPrefix(path, module+"/")) {
+				t.Errorf("GFO-003/GFO-102 v1.4 CGO_ENABLED=%s: the path-agent closure holds %s of module %q, which is not in the fixed external module list %v", cgo, path, module, gfoAgentAllowedExternalModules)
+				continue
+			}
+			seen[module] = true
+		}
+		for _, m := range gfoAgentAllowedExternalModules {
+			if !seen[m] {
+				t.Errorf("GFO-003/GFO-102 v1.4 CGO_ENABLED=%s: the fixed external module %s is missing from the path-agent closure (the closure must be exactly the fixed list)", cgo, m)
 			}
 		}
 	}
@@ -165,24 +235,6 @@ func TestGFO102_GFO003_BuildAndDependencies(t *testing.T) {
 	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
 		t.Fatal(err)
-	}
-	// v1.3: the require-absence check became a closure check on cmd/path-agent
-	// that also names the owning module of every non-standard package.
-	for _, cgo := range []string{"0", "1"} {
-		out := run(t, []string{"CGO_ENABLED=" + cgo}, "go", "list", "-deps", "-f", "{{.ImportPath}}|{{.Standard}}|{{if .Module}}{{.Module.Path}}{{end}}", "./cmd/path-agent")
-		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-			parts := strings.Split(line, "|")
-			if len(parts) != 3 {
-				t.Fatalf("GFO-003/GFO-102 v1.3: unexpected go list line %q", line)
-			}
-			path, std, module := parts[0], parts[1], parts[2]
-			if std == "true" {
-				continue
-			}
-			if module != gfoModule || (path != gfoModule && !strings.HasPrefix(path, gfoModule+"/")) {
-				t.Errorf("GFO-003/GFO-102 v1.3 CGO_ENABLED=%s: the path-agent closure holds %s of module %q (only the standard library and %s are allowed)", cgo, path, module, gfoModule)
-			}
-		}
 	}
 	if !strings.HasPrefix(string(mod), "module "+gfoModule+"\n") {
 		t.Errorf("GFO-003: go.mod module line changed")

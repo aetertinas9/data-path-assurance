@@ -27,6 +27,8 @@ var gkaCFlagNames = []string{
 	"kubeconfig", "cluster-id", "controller-id", "leader-election-namespace", "leader-election-id",
 	"leader-election-lease-duration", "leader-election-renew-deadline", "leader-election-retry-period",
 	"resync-interval", "log-level",
+	// GKA-160 v1.1 (gpu-fleet-live-ingest GLI-090): the usage names the ingest flags too.
+	"ingest-listen", "ingest-service-dns", "ingest-cert-file", "ingest-key-file", "ingest-ca-file", "ingest-profile-id",
 }
 
 var gkaCUsageMessages = []string{

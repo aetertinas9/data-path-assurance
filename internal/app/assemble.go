@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aetertinas9/data-path-assurance/internal/app/framecore"
 	"github.com/aetertinas9/data-path-assurance/internal/domains/pcie"
 	"github.com/aetertinas9/data-path-assurance/internal/fleet"
 	"github.com/aetertinas9/data-path-assurance/internal/graph"
@@ -191,13 +192,13 @@ func allocationOf(d fleet.DeviceDecision) (*AllocationView, error) {
 func (a *assembler) indexTopology() {
 	a.edges = a.frame.Edges
 	a.outgoing = map[string][]int{}
-	byEdge := provenanceFor(a.frame.Provenance)
+	byEdge := framecore.ProvenanceIndex(a.frame.Provenance)
 	a.trusted = make([]*fleet.EdgeProvenance, len(a.edges))
 	now := a.res.evaluated
 	freshness := a.r.Policy.Freshness
 	for i, e := range a.edges {
 		a.outgoing[e.From.Key()] = append(a.outgoing[e.From.Key()], i)
-		for _, p := range byEdge[edgeIdentity(e)] {
+		for _, p := range byEdge[framecore.EdgeIdentity(e)] {
 			if p.Kind != fleet.EdgeEvidenceObserved || !a.trustedFor(fleet.TrustSysfsPhysicalParent, p.Source) {
 				continue
 			}

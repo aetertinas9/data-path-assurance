@@ -7,9 +7,10 @@ DOMAIN_CORE := pkg/model|internal/identity|internal/graph|internal/evidence|inte
 
 # Import paths the domain core must never reach, directly or transitively.
 # The domain core knows nothing about Kubernetes, HTTP, Prometheus, gNMI,
-# gRPC or the native PCIe adapter; those live behind adapters at the edges.
-# runtime/cgo is listed so a transitive cgo dependency is rejected as well.
-FORBIDDEN_IMPORTS := k8s\.io|net/http|prometheus/|gnmi|grpc|internal/nativepcie|^runtime/cgo$$
+# gRPC, protobuf or the native PCIe adapter; those live behind adapters at the
+# edges. runtime/cgo is listed so a transitive cgo dependency is rejected as
+# well. The grpc pattern does not match protobuf, so protobuf is listed too.
+FORBIDDEN_IMPORTS := k8s\.io|net/http|prometheus/|gnmi|grpc|internal/nativepcie|^runtime/cgo$$|google\.golang\.org/protobuf
 
 # ---------------------------------------------------------------------------
 # Native PCIe observer (libdpa_pcie). Requires only make, a C compiler and ar.
@@ -91,6 +92,7 @@ native-record = printf '%s\n' '$(2)' > '$(1).digest'
 .PHONY: all build vet fmt test arch-check
 .PHONY: native native-asan native-example native-test native-test-sanitize clean-native native-force
 .PHONY: generate verify-generated envtest-assets test-envtest
+.PHONY: generate-proto verify-proto
 
 all: build vet arch-check
 
@@ -285,6 +287,62 @@ test-envtest:
 	echo "test-envtest: envtest assets: $(CURDIR)/$(ENVTEST_ASSETS)"; \
 	echo 'go test -race -count=1 -timeout 30m ./tests/kubeapi/...'; \
 	KUBEBUILDER_ASSETS='$(CURDIR)/$(ENVTEST_ASSETS)' go test -race -count=1 -timeout 30m ./tests/kubeapi/...
+
+# --- Ingest wire contract: generated protobuf and gRPC code ------------------
+#
+# api/proto/dpa/ingest/v1alpha1/ingest.proto is compiled by buf, and the two
+# plugins named in api/proto/buf.gen.yaml (protoc-gen-go and
+# protoc-gen-go-grpc, each at a pinned version) write
+# internal/ingest/ingestpb/ingest.pb.go and ingest_grpc.pb.go. All three tools
+# are run through `go run <module>@<version>` with the local Go toolchain
+# (GOTOOLCHAIN=local, so no automatic toolchain switch); none of them is a
+# go.mod requirement or a `tool` directive, and no system protoc or global
+# install is used. The generated files are checked in and never edited by
+# hand. The first run needs network access and compiles the tools.
+
+BUF_VERSION := v1.72.0
+BUF := GOTOOLCHAIN=local go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
+PROTO_DIR := api/proto
+PROTO_GEN_TEMPLATE := $(PROTO_DIR)/buf.gen.yaml
+PROTO_OUT_DIR := internal/ingest/ingestpb
+PROTO_GENERATED := ingest.pb.go ingest_grpc.pb.go
+
+# Regenerates the two files in place.
+generate-proto:
+	$(BUF) generate $(PROTO_DIR) --template $(PROTO_GEN_TEMPLATE)
+
+# Regenerates into a scratch directory in the system temporary directory
+# ($TMPDIR, else /tmp) and compares the two files byte for byte with the
+# checked-in ones. It never writes into the repository tree, needs no git, and
+# tells a failed generation apart from drift by its message. It is not part of
+# `all` because it needs network access and compiles the generator tools.
+verify-proto:
+	@set -u; \
+	work="$$(mktemp -d "$${TMPDIR:-/tmp}/dpa-verify-proto.XXXXXX")" || { echo "verify-proto: cannot create a scratch directory" >&2; exit 1; }; \
+	trap 'rm -rf "$$work"' EXIT; \
+	trap 'exit 1' HUP INT TERM; \
+	$(BUF) generate $(PROTO_DIR) --template $(PROTO_GEN_TEMPLATE) -o "$$work" \
+		|| { echo "verify-proto: buf generate failed (generation error, not drift)" >&2; exit 1; }; \
+	status=0; \
+	expected="$$(for f in $(PROTO_GENERATED); do echo "$(PROTO_OUT_DIR)/$$f"; done | sort)"; \
+	produced="$$(cd "$$work" && find . -type f | sed 's|^\./||' | sort)"; \
+	if [ "$$produced" != "$$expected" ]; then \
+		echo "verify-proto: DRIFT the generated file set differs from the expected one:" >&2; \
+		printf '%s\n' "$$produced" | sed 's/^/      /' >&2; \
+		status=1; \
+	fi; \
+	for f in $(PROTO_GENERATED); do \
+		if ! cmp -s "$$work/$(PROTO_OUT_DIR)/$$f" '$(PROTO_OUT_DIR)'/"$$f"; then \
+			echo "verify-proto: DRIFT $(PROTO_OUT_DIR)/$$f differs from the generated output" >&2; \
+			status=1; \
+		fi; \
+	done; \
+	if [ $$status -eq 0 ]; then \
+		echo "verify-proto: OK"; \
+	else \
+		echo "verify-proto: run 'make generate-proto' and review the diff" >&2; \
+	fi; \
+	exit $$status
 
 # arch-check enforces the dependency direction of the domain core.
 #
