@@ -1,0 +1,67 @@
+HOST  source=fixture:testdata/fixtures/two-socket-rtx  numa=2  gpus=3  nics=2  result=FAIL
+
+GPU           MODEL                                  LINK      NUMA  BEST NIC                  LOC  CAP     NVLINK  RESULT
+0000:1b:00.0  RTX PRO 6000 Blackwell Server Edition  Gen5 x16  0     0000:1c:00.0 ConnectX-7   PIX  50GB/s  -       FAIL
+0000:1d:00.0  RTX PRO 6000 Blackwell Server Edition  Gen5 x16  0     0000:1c:00.0 ConnectX-7   PIX  50GB/s  -       FAIL
+0000:9b:00.0  RTX PRO 6000 Blackwell Server Edition  Gen4 x8   1     0000:9c:00.0 BlueField-3  PHB  16GB/s  -       FAIL
+
+GPU 0000:1b:00.0  NVIDIA RTX PRO 6000 Blackwell Server Edition  [GPU0 GPU-11111111-1111-1111-1111-111111111111]
+  link   Gen5 x16 63GB/s
+  path   0000:1b:00.0 gpu  Gen5 x16 63GB/s
+         0000:1a:04.0 downstream  Gen5 x16 63GB/s  ACS REDIRECT ReqRedir+CmplRedir
+         0000:19:00.0 upstream  Gen5 x16 63GB/s  ACS none
+         0000:16:01.0 root  NUMA 0  cpus 0-47,96-143
+  nic    0000:1c:00.0 ConnectX-7  mlx5_0/1 400Gb/s ACTIVE  PIX  cap 50GB/s (port mlx5_0/1)  topo PIX
+  dpu    0000:9c:00.0 BlueField-3  mlx5_2/1 400Gb/s ACTIVE  SYS  cap 50GB/s (port mlx5_2/1)  topo SYS
+  peer   0000:1d:00.0 RTX PRO 6000 Blackwell Server Edition  PIX  p2p BLOCKED by ACS on 0000:1a:04.0, 0000:1a:05.0
+  peer   0000:9b:00.0 RTX PRO 6000 Blackwell Server Edition  SYS
+  checks
+    gpu-link        PASS  Gen5 x16
+    upstream-links  PASS  all at expected width and speed
+    nic-locality    PASS  0000:1c:00.0 ConnectX-7 via PIX (target PXB or better)
+    nic-port        PASS  mlx5_0/1 400 Gb/s ACTIVE
+    numa-aligned    PASS  GPU and mlx5_0/1 both on NUMA 0
+    p2p-acs         FAIL  ACS P2P redirect enabled on 0000:1a:04.0, 0000:1a:05.0
+    nvlink          N/A   no NVLink on this GPU
+    pcie-errors     PASS  no correctable errors counted
+    pcie-payload    PASS  MaxPayload 256B on both; MaxReadReq GPU 512B, NIC 512B
+
+GPU 0000:1d:00.0  NVIDIA RTX PRO 6000 Blackwell Server Edition  [GPU1 GPU-22222222-2222-2222-2222-222222222222]
+  link   Gen5 x16 63GB/s
+  path   0000:1d:00.0 gpu  Gen5 x16 63GB/s
+         0000:1a:05.0 downstream  Gen5 x16 63GB/s  ACS REDIRECT ReqRedir+CmplRedir
+         0000:19:00.0 upstream  Gen5 x16 63GB/s  ACS none
+         0000:16:01.0 root  NUMA 0  cpus 0-47,96-143
+  nic    0000:1c:00.0 ConnectX-7  mlx5_0/1 400Gb/s ACTIVE  PIX  cap 50GB/s (port mlx5_0/1)  topo PIX
+  dpu    0000:9c:00.0 BlueField-3  mlx5_2/1 400Gb/s ACTIVE  SYS  cap 50GB/s (port mlx5_2/1)  topo SYS
+  peer   0000:1b:00.0 RTX PRO 6000 Blackwell Server Edition  PIX  p2p BLOCKED by ACS on 0000:1a:04.0, 0000:1a:05.0
+  peer   0000:9b:00.0 RTX PRO 6000 Blackwell Server Edition  SYS
+  checks
+    gpu-link        PASS  Gen5 x16
+    upstream-links  PASS  all at expected width and speed
+    nic-locality    PASS  0000:1c:00.0 ConnectX-7 via PIX (target PXB or better)
+    nic-port        PASS  mlx5_0/1 400 Gb/s ACTIVE
+    numa-aligned    PASS  GPU and mlx5_0/1 both on NUMA 0
+    p2p-acs         FAIL  ACS P2P redirect enabled on 0000:1a:04.0, 0000:1a:05.0
+    nvlink          N/A   no NVLink on this GPU
+    pcie-errors     PASS  no correctable errors counted
+    pcie-payload    PASS  MaxPayload 256B on both; MaxReadReq GPU 512B, NIC 512B
+
+GPU 0000:9b:00.0  NVIDIA RTX PRO 6000 Blackwell Server Edition  [GPU2 GPU-33333333-3333-3333-3333-333333333333]
+  link   Gen4 x8 16GB/s DEGRADED (expected Gen5 x16)
+  path   0000:9b:00.0 gpu  Gen4 x8 16GB/s DEGRADED (expected Gen5 x16)
+         0000:97:01.0 root  NUMA 1  cpus 48-95,144-191
+  dpu    0000:9c:00.0 BlueField-3  mlx5_2/1 400Gb/s ACTIVE  PHB  cap 16GB/s (pcie 0000:9b:00.0)  topo PHB
+  nic    0000:1c:00.0 ConnectX-7  mlx5_0/1 400Gb/s ACTIVE  SYS  cap 16GB/s (pcie 0000:9b:00.0)  topo SYS
+  peer   0000:1b:00.0 RTX PRO 6000 Blackwell Server Edition  SYS
+  peer   0000:1d:00.0 RTX PRO 6000 Blackwell Server Edition  SYS
+  checks
+    gpu-link        FAIL  Gen4 x8 negotiated, Gen5 x16 expected
+    upstream-links  N/A   GPU sits directly under the root port
+    nic-locality    FAIL  0000:9c:00.0 BlueField-3 (integrated ConnectX-7) via PHB, target PXB or better
+    nic-port        PASS  mlx5_2/1 400 Gb/s ACTIVE
+    numa-aligned    PASS  GPU and mlx5_2/1 both on NUMA 1
+    p2p-acs         N/A   no GPU peer under the same root port
+    nvlink          N/A   no NVLink on this GPU
+    pcie-errors     WARN  15 correctable errors counted on the GPU link
+    pcie-payload    PASS  MaxPayload 256B on both; MaxReadReq GPU 512B, NIC 512B

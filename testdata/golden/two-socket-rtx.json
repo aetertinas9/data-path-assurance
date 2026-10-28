@@ -1,0 +1,515 @@
+{
+  "source": "fixture:testdata/fixtures/two-socket-rtx",
+  "result": "FAIL",
+  "numa": [
+    {
+      "id": 0,
+      "cpus": "0-47,96-143"
+    },
+    {
+      "id": 1,
+      "cpus": "48-95,144-191"
+    }
+  ],
+  "gpus": [
+    {
+      "bdf": "0000:1b:00.0",
+      "index": 0,
+      "uuid": "GPU-11111111-1111-1111-1111-111111111111",
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "numa": 0,
+      "cpus": "0-47,96-143",
+      "path": [
+        {
+          "bdf": "0000:1b:00.0",
+          "kind": "gpu",
+          "model": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+          "link": {
+            "known": true,
+            "gen": 5,
+            "width": 16,
+            "expected_gen": 5,
+            "expected_width": 16,
+            "max_gen": 5,
+            "max_width": 16,
+            "gbps": 63.008,
+            "degraded": false,
+            "platform_limited": false
+          }
+        },
+        {
+          "bdf": "0000:1a:04.0",
+          "kind": "downstream",
+          "model": "PCI bridge 1000:c030 (pcieport)",
+          "link": {
+            "known": true,
+            "gen": 5,
+            "width": 16,
+            "expected_gen": 5,
+            "expected_width": 16,
+            "max_gen": 5,
+            "max_width": 16,
+            "gbps": 63.008,
+            "degraded": false,
+            "platform_limited": false
+          },
+          "acs": "ACS REDIRECT ReqRedir+CmplRedir"
+        },
+        {
+          "bdf": "0000:19:00.0",
+          "kind": "upstream",
+          "model": "PCI bridge 1000:c030 (pcieport)",
+          "link": {
+            "known": true,
+            "gen": 5,
+            "width": 16,
+            "expected_gen": 5,
+            "expected_width": 16,
+            "max_gen": 5,
+            "max_width": 16,
+            "gbps": 63.008,
+            "degraded": false,
+            "platform_limited": false
+          },
+          "acs": "ACS none"
+        },
+        {
+          "bdf": "0000:16:01.0",
+          "kind": "root",
+          "model": "PCI bridge 8086:1bbd",
+          "link": {
+            "known": false,
+            "degraded": false,
+            "platform_limited": false
+          }
+        }
+      ],
+      "nics": [
+        {
+          "bdf": "0000:1c:00.0",
+          "model": "ConnectX-7",
+          "dpu": false,
+          "port": "mlx5_0/1",
+          "port_gbps": 400,
+          "port_state": "ACTIVE",
+          "numa": 0,
+          "locality": "PIX",
+          "topo": "PIX",
+          "capacity_gbps": 50,
+          "bottleneck": "port mlx5_0/1",
+          "hops": [
+            "0000:1b:00.0 Gen5 x16 63GB/s",
+            "0000:1a:04.0 Gen5 x16 63GB/s",
+            "0000:1c:00.0 Gen5 x16 63GB/s",
+            "0000:1a:06.0 Gen5 x16 63GB/s"
+          ]
+        },
+        {
+          "bdf": "0000:9c:00.0",
+          "model": "BlueField-3 (integrated ConnectX-7)",
+          "dpu": true,
+          "port": "mlx5_2/1",
+          "port_gbps": 400,
+          "port_state": "ACTIVE",
+          "numa": 1,
+          "locality": "SYS",
+          "topo": "SYS",
+          "capacity_gbps": 50,
+          "bottleneck": "port mlx5_2/1",
+          "hops": [
+            "0000:1b:00.0 Gen5 x16 63GB/s",
+            "0000:1a:04.0 Gen5 x16 63GB/s",
+            "0000:19:00.0 Gen5 x16 63GB/s",
+            "0000:9c:00.0 Gen5 x16 63GB/s",
+            "root complex / CPU interconnect"
+          ]
+        }
+      ],
+      "peers": [
+        {
+          "bdf": "0000:1d:00.0",
+          "locality": "PIX",
+          "topo": "PIX",
+          "acs_redirect_on": [
+            "0000:1a:04.0",
+            "0000:1a:05.0"
+          ],
+          "acs_known": true
+        },
+        {
+          "bdf": "0000:9b:00.0",
+          "locality": "SYS",
+          "topo": "SYS",
+          "acs_known": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "gpu-link",
+          "status": "PASS",
+          "detail": "Gen5 x16"
+        },
+        {
+          "name": "upstream-links",
+          "status": "PASS",
+          "detail": "all at expected width and speed"
+        },
+        {
+          "name": "nic-locality",
+          "status": "PASS",
+          "detail": "0000:1c:00.0 ConnectX-7 via PIX (target PXB or better)"
+        },
+        {
+          "name": "nic-port",
+          "status": "PASS",
+          "detail": "mlx5_0/1 400 Gb/s ACTIVE"
+        },
+        {
+          "name": "numa-aligned",
+          "status": "PASS",
+          "detail": "GPU and mlx5_0/1 both on NUMA 0"
+        },
+        {
+          "name": "p2p-acs",
+          "status": "FAIL",
+          "detail": "ACS P2P redirect enabled on 0000:1a:04.0, 0000:1a:05.0"
+        },
+        {
+          "name": "nvlink",
+          "status": "N/A",
+          "detail": "no NVLink on this GPU"
+        },
+        {
+          "name": "pcie-errors",
+          "status": "PASS",
+          "detail": "no correctable errors counted"
+        },
+        {
+          "name": "pcie-payload",
+          "status": "PASS",
+          "detail": "MaxPayload 256B on both; MaxReadReq GPU 512B, NIC 512B"
+        }
+      ],
+      "result": "FAIL"
+    },
+    {
+      "bdf": "0000:1d:00.0",
+      "index": 1,
+      "uuid": "GPU-22222222-2222-2222-2222-222222222222",
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "numa": 0,
+      "cpus": "0-47,96-143",
+      "path": [
+        {
+          "bdf": "0000:1d:00.0",
+          "kind": "gpu",
+          "model": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+          "link": {
+            "known": true,
+            "gen": 5,
+            "width": 16,
+            "expected_gen": 5,
+            "expected_width": 16,
+            "max_gen": 5,
+            "max_width": 16,
+            "gbps": 63.008,
+            "degraded": false,
+            "platform_limited": false
+          }
+        },
+        {
+          "bdf": "0000:1a:05.0",
+          "kind": "downstream",
+          "model": "PCI bridge 1000:c030 (pcieport)",
+          "link": {
+            "known": true,
+            "gen": 5,
+            "width": 16,
+            "expected_gen": 5,
+            "expected_width": 16,
+            "max_gen": 5,
+            "max_width": 16,
+            "gbps": 63.008,
+            "degraded": false,
+            "platform_limited": false
+          },
+          "acs": "ACS REDIRECT ReqRedir+CmplRedir"
+        },
+        {
+          "bdf": "0000:19:00.0",
+          "kind": "upstream",
+          "model": "PCI bridge 1000:c030 (pcieport)",
+          "link": {
+            "known": true,
+            "gen": 5,
+            "width": 16,
+            "expected_gen": 5,
+            "expected_width": 16,
+            "max_gen": 5,
+            "max_width": 16,
+            "gbps": 63.008,
+            "degraded": false,
+            "platform_limited": false
+          },
+          "acs": "ACS none"
+        },
+        {
+          "bdf": "0000:16:01.0",
+          "kind": "root",
+          "model": "PCI bridge 8086:1bbd",
+          "link": {
+            "known": false,
+            "degraded": false,
+            "platform_limited": false
+          }
+        }
+      ],
+      "nics": [
+        {
+          "bdf": "0000:1c:00.0",
+          "model": "ConnectX-7",
+          "dpu": false,
+          "port": "mlx5_0/1",
+          "port_gbps": 400,
+          "port_state": "ACTIVE",
+          "numa": 0,
+          "locality": "PIX",
+          "topo": "PIX",
+          "capacity_gbps": 50,
+          "bottleneck": "port mlx5_0/1",
+          "hops": [
+            "0000:1d:00.0 Gen5 x16 63GB/s",
+            "0000:1a:05.0 Gen5 x16 63GB/s",
+            "0000:1c:00.0 Gen5 x16 63GB/s",
+            "0000:1a:06.0 Gen5 x16 63GB/s"
+          ]
+        },
+        {
+          "bdf": "0000:9c:00.0",
+          "model": "BlueField-3 (integrated ConnectX-7)",
+          "dpu": true,
+          "port": "mlx5_2/1",
+          "port_gbps": 400,
+          "port_state": "ACTIVE",
+          "numa": 1,
+          "locality": "SYS",
+          "topo": "SYS",
+          "capacity_gbps": 50,
+          "bottleneck": "port mlx5_2/1",
+          "hops": [
+            "0000:1d:00.0 Gen5 x16 63GB/s",
+            "0000:1a:05.0 Gen5 x16 63GB/s",
+            "0000:19:00.0 Gen5 x16 63GB/s",
+            "0000:9c:00.0 Gen5 x16 63GB/s",
+            "root complex / CPU interconnect"
+          ]
+        }
+      ],
+      "peers": [
+        {
+          "bdf": "0000:1b:00.0",
+          "locality": "PIX",
+          "topo": "PIX",
+          "acs_redirect_on": [
+            "0000:1a:04.0",
+            "0000:1a:05.0"
+          ],
+          "acs_known": true
+        },
+        {
+          "bdf": "0000:9b:00.0",
+          "locality": "SYS",
+          "topo": "SYS",
+          "acs_known": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "gpu-link",
+          "status": "PASS",
+          "detail": "Gen5 x16"
+        },
+        {
+          "name": "upstream-links",
+          "status": "PASS",
+          "detail": "all at expected width and speed"
+        },
+        {
+          "name": "nic-locality",
+          "status": "PASS",
+          "detail": "0000:1c:00.0 ConnectX-7 via PIX (target PXB or better)"
+        },
+        {
+          "name": "nic-port",
+          "status": "PASS",
+          "detail": "mlx5_0/1 400 Gb/s ACTIVE"
+        },
+        {
+          "name": "numa-aligned",
+          "status": "PASS",
+          "detail": "GPU and mlx5_0/1 both on NUMA 0"
+        },
+        {
+          "name": "p2p-acs",
+          "status": "FAIL",
+          "detail": "ACS P2P redirect enabled on 0000:1a:04.0, 0000:1a:05.0"
+        },
+        {
+          "name": "nvlink",
+          "status": "N/A",
+          "detail": "no NVLink on this GPU"
+        },
+        {
+          "name": "pcie-errors",
+          "status": "PASS",
+          "detail": "no correctable errors counted"
+        },
+        {
+          "name": "pcie-payload",
+          "status": "PASS",
+          "detail": "MaxPayload 256B on both; MaxReadReq GPU 512B, NIC 512B"
+        }
+      ],
+      "result": "FAIL"
+    },
+    {
+      "bdf": "0000:9b:00.0",
+      "index": 2,
+      "uuid": "GPU-33333333-3333-3333-3333-333333333333",
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "numa": 1,
+      "cpus": "48-95,144-191",
+      "path": [
+        {
+          "bdf": "0000:9b:00.0",
+          "kind": "gpu",
+          "model": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+          "link": {
+            "known": true,
+            "gen": 4,
+            "width": 8,
+            "expected_gen": 5,
+            "expected_width": 16,
+            "max_gen": 5,
+            "max_width": 16,
+            "gbps": 15.752,
+            "degraded": true,
+            "platform_limited": false
+          }
+        },
+        {
+          "bdf": "0000:97:01.0",
+          "kind": "root",
+          "model": "PCI bridge 8086:1bbd",
+          "link": {
+            "known": false,
+            "degraded": false,
+            "platform_limited": false
+          }
+        }
+      ],
+      "nics": [
+        {
+          "bdf": "0000:9c:00.0",
+          "model": "BlueField-3 (integrated ConnectX-7)",
+          "dpu": true,
+          "port": "mlx5_2/1",
+          "port_gbps": 400,
+          "port_state": "ACTIVE",
+          "numa": 1,
+          "locality": "PHB",
+          "topo": "PHB",
+          "capacity_gbps": 15.752,
+          "bottleneck": "pcie 0000:9b:00.0",
+          "hops": [
+            "0000:9b:00.0 Gen4 x8 16GB/s",
+            "0000:9c:00.0 Gen5 x16 63GB/s"
+          ]
+        },
+        {
+          "bdf": "0000:1c:00.0",
+          "model": "ConnectX-7",
+          "dpu": false,
+          "port": "mlx5_0/1",
+          "port_gbps": 400,
+          "port_state": "ACTIVE",
+          "numa": 0,
+          "locality": "SYS",
+          "topo": "SYS",
+          "capacity_gbps": 15.752,
+          "bottleneck": "pcie 0000:9b:00.0",
+          "hops": [
+            "0000:9b:00.0 Gen4 x8 16GB/s",
+            "0000:1c:00.0 Gen5 x16 63GB/s",
+            "0000:1a:06.0 Gen5 x16 63GB/s",
+            "0000:19:00.0 Gen5 x16 63GB/s",
+            "root complex / CPU interconnect"
+          ]
+        }
+      ],
+      "peers": [
+        {
+          "bdf": "0000:1b:00.0",
+          "locality": "SYS",
+          "topo": "SYS",
+          "acs_known": false
+        },
+        {
+          "bdf": "0000:1d:00.0",
+          "locality": "SYS",
+          "topo": "SYS",
+          "acs_known": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "gpu-link",
+          "status": "FAIL",
+          "detail": "Gen4 x8 negotiated, Gen5 x16 expected"
+        },
+        {
+          "name": "upstream-links",
+          "status": "N/A",
+          "detail": "GPU sits directly under the root port"
+        },
+        {
+          "name": "nic-locality",
+          "status": "FAIL",
+          "detail": "0000:9c:00.0 BlueField-3 (integrated ConnectX-7) via PHB, target PXB or better"
+        },
+        {
+          "name": "nic-port",
+          "status": "PASS",
+          "detail": "mlx5_2/1 400 Gb/s ACTIVE"
+        },
+        {
+          "name": "numa-aligned",
+          "status": "PASS",
+          "detail": "GPU and mlx5_2/1 both on NUMA 1"
+        },
+        {
+          "name": "p2p-acs",
+          "status": "N/A",
+          "detail": "no GPU peer under the same root port"
+        },
+        {
+          "name": "nvlink",
+          "status": "N/A",
+          "detail": "no NVLink on this GPU"
+        },
+        {
+          "name": "pcie-errors",
+          "status": "WARN",
+          "detail": "15 correctable errors counted on the GPU link"
+        },
+        {
+          "name": "pcie-payload",
+          "status": "PASS",
+          "detail": "MaxPayload 256B on both; MaxReadReq GPU 512B, NIC 512B"
+        }
+      ],
+      "result": "FAIL"
+    }
+  ],
+  "limitations": []
+}

@@ -285,3 +285,27 @@ finding 과 뷰 값. 기존 `pcie` 폭 규칙의 "3 샘플·30 초 지속" 패�
 6. **ACS 읽기 권한.** 확장 config 는 root 가 필요하다. 에이전트는 root 로
    돌되 여전히 아무것도 쓰지 않는다는 것을 테스트(`rt_` 류의 읽기 집합
    검증)로 고정한다.
+
+---
+
+## 11. 실행 결과 (2026-10-28)
+
+계획의 0~5단계 중 하드웨어가 없어도 되는 부분을 한 번에 구현했다. 기존
+트리는 `legacy/v0-control-plane` 태그로 보존하고 모두 제거했으며, 새 트리는
+표준 라이브러리만 쓰는 단일 바이너리 `pathctl` 이다.
+
+| 계획 항목 | 결과 |
+|---|---|
+| Tier A/B 축소, nativepcie 제거 | 완료. 약 11.7만 줄 → 약 4천 줄(테스트 포함) |
+| 읽기 집합 확장 (속도, max 폭, NUMA, device ID, config/ACS, AER, RDMA, net, cpulist) | 완료, `internal/sysfs` |
+| 캡처 모드 | 완료, `pathctl capture` |
+| 장치 프로파일 | 완료, `internal/datapath/devices.go` + `--devices` JSON |
+| locality / capacity / p2p-ACS / NVLink / NIC / NUMA 규칙 | 완료, `internal/datapath` |
+| `pathctl path` text/json/mermaid, `pathctl check` 종료 코드 | 완료 |
+| 실제 B300 / RTX PRO 6000 / BF3 픽스처 | **미완**. 합성 픽스처 2개로 대체. 실제 장비에서 `pathctl capture` 후 커밋 필요 |
+
+계획과 달라진 점: 기존 도메인 코어(model, evidence, graph)도 유지하지 않았다.
+스냅샷 한 장을 읽어 판정하는 도구에는 스트리밍 증거 창과 리듀서가 필요
+없었고, 유지하면 쓰이지 않는 코드와 2만 줄의 테스트가 남았기 때문이다.
+"3 샘플·30 초 지속" 규칙은 빠졌다. 반복 실행은 `pathctl check` 의 종료 코드로
+번인 루프에서 처리한다.
