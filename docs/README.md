@@ -9,3 +9,5 @@ data-path-assurance.
   target adapter flow, and operational boundaries
 - [Getting started](getting-started.md) — source checks, offline collection and
   explain, Kubernetes API tests, and the current deployment limitation
+- [Data Path v2 plan](plan/data-path-v2.md) — scope reduction and the B300 /
+  RTX PRO 6000 Blackwell / DPU data-path view and max-performance checks
