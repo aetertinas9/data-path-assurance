@@ -3,6 +3,7 @@
 //
 //	pathctl path    [--sysfs /sys | --fixture DIR] [--nvidia-smi PATH] [--gpu ID] [--output text|json|mermaid]
 //	pathctl check   same flags; exits 3 when any check fails
+//	pathctl watch   same flags plus --interval and --count; prints check changes, exits 3 if any FAIL was seen
 //	pathctl capture --out DIR [--sysfs /sys] [--nvidia-smi PATH]
 //
 // A fixture directory holds sys/ (as written by capture) and nvidia/ with
@@ -34,6 +35,8 @@ const usage = `usage:
   pathctl path    [--sysfs DIR | --fixture DIR] [--nvidia-smi PATH] [--devices FILE]
                   [--locality PIX|PXB|PHB|NODE|SYS] [--gpu BDF|UUID|INDEX] [--output text|json|mermaid]
   pathctl check   (same flags as path; exit 3 when a check fails)
+  pathctl watch   (same flags as path) [--interval 15s] [--count N]
+                  re-reads the host and prints every check that changes; exit 3 if any FAIL was seen
   pathctl capture --out DIR [--sysfs DIR] [--nvidia-smi PATH]
 `
 
@@ -55,6 +58,25 @@ func (c *common) flags(fs *flag.FlagSet) {
 	fs.StringVar(&c.output, "output", "text", "text, json or mermaid")
 }
 
+// options turns the shared flags into datapath options; a non-zero code is
+// the exit code of a usage error already written to stderr.
+func (c *common) options(stderr io.Writer) (datapath.Options, int) {
+	opts := datapath.DefaultOptions()
+	loc, ok := datapath.ParseLocality(strings.ToUpper(c.locality))
+	if !ok {
+		fmt.Fprintf(stderr, "pathctl: --locality must be PIX, PXB, PHB, NODE or SYS\n")
+		return opts, 2
+	}
+	opts.LocalityTarget = loc
+	if c.devices != "" {
+		if err := opts.Table.LoadExtra(c.devices); err != nil {
+			fmt.Fprintf(stderr, "pathctl: --devices: %v\n", err)
+			return opts, 2
+		}
+	}
+	return opts, 0
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
@@ -65,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "path", "check":
 		return runPath(ctx, args[0], args[1:], stdout, stderr)
+	case "watch":
+		return runWatch(ctx, args[1:], stdout, stderr)
 	case "capture":
 		return runCapture(ctx, args[1:], stdout, stderr)
 	case "-h", "--help", "help":
@@ -87,18 +111,9 @@ func runPath(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		fmt.Fprintf(stderr, "pathctl %s: unexpected argument %q\n", cmd, fs.Arg(0))
 		return 2
 	}
-	opts := datapath.DefaultOptions()
-	loc, ok := datapath.ParseLocality(strings.ToUpper(c.locality))
-	if !ok {
-		fmt.Fprintf(stderr, "pathctl: --locality must be PIX, PXB, PHB, NODE or SYS\n")
-		return 2
-	}
-	opts.LocalityTarget = loc
-	if c.devices != "" {
-		if err := opts.Table.LoadExtra(c.devices); err != nil {
-			fmt.Fprintf(stderr, "pathctl: --devices: %v\n", err)
-			return 2
-		}
+	opts, code := c.options(stderr)
+	if code != 0 {
+		return code
 	}
 	if c.output != "text" && c.output != "json" && c.output != "mermaid" {
 		fmt.Fprintf(stderr, "pathctl: --output must be text, json or mermaid\n")

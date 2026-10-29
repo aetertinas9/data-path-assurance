@@ -15,6 +15,7 @@ Go 1.26 or newer; no other dependency.
 sudo bin/pathctl path                 # all GPUs
 sudo bin/pathctl path --gpu 0000:1b:00.0
 sudo bin/pathctl check; echo $?       # 0 when no check fails, 3 otherwise
+sudo bin/pathctl watch --interval 15s --count 240   # one hour burn-in; prints changes only
 ```
 
 Root is only needed for the PCI configuration space (ACS and payload sizes);
