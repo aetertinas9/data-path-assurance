@@ -1,0 +1,45 @@
+HOST  source=fixture:testdata/fixtures/nvlink-pair  numa=1  gpus=2  nics=1  result=FAIL
+
+GPU           MODEL  LINK      NUMA  BEST NIC                 LOC  CAP      NVLINK  RESULT
+0000:03:00.0  B300   Gen6 x16  0     0000:05:00.0 ConnectX-8  PIX  100GB/s  18/18   PASS
+0000:04:00.0  B300   Gen6 x16  0     0000:05:00.0 ConnectX-8  PIX  100GB/s  17/18   FAIL
+
+GPU 0000:03:00.0  NVIDIA B300  [GPU0 GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa]
+  link   Gen6 x16 121GB/s
+  path   0000:03:00.0 gpu  Gen6 x16 121GB/s
+         0000:02:00.0 downstream  Gen6 x16 121GB/s  ACS off
+         0000:01:00.0 upstream  Gen5 x16 63GB/s (device max Gen6 x16)  ACS none
+         0000:00:01.0 root  NUMA 0  cpus 0-63
+  nic    0000:05:00.0 ConnectX-8  mlx5_0/1 800Gb/s ACTIVE  PIX  cap 100GB/s (port mlx5_0/1)  topo PIX
+  peer   0000:04:00.0 B300  PIX  nvlink x18
+  nvlink 18 of 18 links active
+  checks
+    gpu-link        PASS  Gen6 x16
+    upstream-links  PASS  all at expected width and speed
+    nic-locality    PASS  0000:05:00.0 ConnectX-8 via PIX (target PXB or better)
+    nic-port        PASS  mlx5_0/1 800 Gb/s ACTIVE
+    numa-aligned    PASS  GPU and mlx5_0/1 both on NUMA 0
+    p2p-acs         PASS  no ACS redirect on the switch path to 0000:04:00.0
+    nvlink          PASS  18 of 18 links active
+    pcie-errors     PASS  no correctable errors counted
+    pcie-payload    PASS  MaxPayload 512B on both; MaxReadReq GPU 4096B, NIC 4096B
+
+GPU 0000:04:00.0  NVIDIA B300  [GPU1 GPU-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb]
+  link   Gen6 x16 121GB/s
+  path   0000:04:00.0 gpu  Gen6 x16 121GB/s
+         0000:02:01.0 downstream  Gen6 x16 121GB/s  ACS off
+         0000:01:00.0 upstream  Gen5 x16 63GB/s (device max Gen6 x16)  ACS none
+         0000:00:01.0 root  NUMA 0  cpus 0-63
+  nic    0000:05:00.0 ConnectX-8  mlx5_0/1 800Gb/s ACTIVE  PIX  cap 100GB/s (port mlx5_0/1)  topo PIX
+  peer   0000:03:00.0 B300  PIX  nvlink x18
+  nvlink 17 of 18 links active
+  checks
+    gpu-link        PASS  Gen6 x16
+    upstream-links  PASS  all at expected width and speed
+    nic-locality    PASS  0000:05:00.0 ConnectX-8 via PIX (target PXB or better)
+    nic-port        PASS  mlx5_0/1 800 Gb/s ACTIVE
+    numa-aligned    PASS  GPU and mlx5_0/1 both on NUMA 0
+    p2p-acs         PASS  no ACS redirect on the switch path to 0000:03:00.0
+    nvlink          FAIL  17 of 18 links active
+    pcie-errors     PASS  no correctable errors counted
+    pcie-payload    PASS  MaxPayload 512B on both; MaxReadReq GPU 4096B, NIC 4096B
