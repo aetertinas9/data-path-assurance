@@ -92,3 +92,27 @@ func afterFirstLine(s string) string {
 	_, rest, _ := strings.Cut(s, "\n")
 	return rest
 }
+
+func TestWatch(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"watch", "--fixture", fixture, "--interval", "10ms", "--count", "2", "--gpu", "0000:9b:00.0"}, &out, &errb)
+	if code != 3 {
+		t.Fatalf("watch exit %d, want 3 (a FAIL was seen): %s", code, errb.String())
+	}
+	s := out.String()
+	if strings.Count(s, "result=FAIL gpus=1") != 2 {
+		t.Errorf("expected two reads:\n%s", s)
+	}
+	// Every check is printed on the first read and, the fixture being
+	// static, nothing on the second.
+	if strings.Count(s, "0000:9b:00.0 gpu-link FAIL") != 1 || strings.Contains(s, "->") {
+		t.Errorf("change lines:\n%s", s)
+	}
+	out.Reset()
+	if code := run([]string{"watch", "--fixture", "../../testdata/fixtures/nvlink-pair", "--interval", "10ms", "--count", "1", "--gpu", "0"}, &out, &errb); code != 0 {
+		t.Errorf("healthy GPU watch exit %d: %s", code, out.String())
+	}
+	if code := run([]string{"watch", "--fixture", fixture, "--interval", "0s"}, &out, &errb); code != 2 {
+		t.Errorf("zero interval exit %d, want 2", code)
+	}
+}

@@ -42,6 +42,7 @@ sudo bin/pathctl path --gpu 0           # one GPU, by nvidia-smi index, PCI addr
 sudo bin/pathctl path --output json     # the same content for scripts
 sudo bin/pathctl path --output mermaid  # a diagram to paste into a README or an issue
 sudo bin/pathctl check                  # checks only; exit 3 when any check fails
+sudo bin/pathctl watch --interval 15s   # burn-in: print every check that changes; exit 3 if any FAIL was seen
 sudo bin/pathctl capture --out hosts/gpu-node-1   # copy the read set into a fixture
 bin/pathctl path --fixture hosts/gpu-node-1      # read the fixture anywhere, later
 ```
@@ -96,7 +97,11 @@ For every GPU:
 | `pcie-payload` | same MaxPayload on GPU and NIC | WARN when they differ |
 
 `check` exits 3 on any FAIL and 0 otherwise. UNKNOWN never fails a host; its
-reason is in the detail column.
+reason is in the detail column. `watch` repeats the read every `--interval`
+(`--count` limits the reads), prints the full check list once and then only
+the checks whose status or detail changed, and exits 3 if any read saw a
+FAIL: a link that drops to x8 for one read during a burn-in is caught even if
+it recovers.
 
 ## How it reads
 
@@ -123,7 +128,7 @@ reason is in the detail column.
 
 | path | what |
 |---|---|
-| `cmd/pathctl` | the command: `path`, `check`, `capture` |
+| `cmd/pathctl` | the command: `path`, `check`, `watch`, `capture` |
 | `internal/sysfs` | read-only bounded sysfs reader and `Capture` |
 | `internal/nvidia` | bounded `nvidia-smi` runner and the three parsers |
 | `internal/datapath` | device table, path model, locality, capacity, checks |
